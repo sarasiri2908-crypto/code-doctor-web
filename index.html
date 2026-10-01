@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Code Doctor IDE Helper</title>
+<style>
+:root{
+  --bg:#07111f;--panel:#0e1a2d;--panel2:#111f36;--line:#273955;
+  --text:#edf5ff;--muted:#93a4bd;--blue:#4b7cff;--red:#ff6574;
+  --yellow:#f5b94c;--green:#42d392;--cyan:#5dc8ff
+}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(140deg,#07111f,#0b1424 55%,#07111f);
+color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.app{max-width:1550px;margin:auto;padding:20px}
+header{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+h1{margin:0;font-size:27px}.sub{color:var(--muted);margin-top:5px;font-size:13px}
+.badge{background:#13233d;border:1px solid var(--line);padding:8px 12px;border-radius:999px;color:#d7e5ff;font-size:12px}
+.toolbar{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:12px}
+button,select{
+  border:1px solid var(--line);background:#122038;color:#fff;padding:9px 12px;
+  border-radius:9px;font-size:13px
+}
+button{cursor:pointer}button.primary{background:var(--blue);border-color:var(--blue);font-weight:700}
+button:hover{filter:brightness(1.08)}
+.layout{display:grid;grid-template-columns:1.08fr .92fr;gap:14px}
+.panel{background:rgba(14,26,45,.97);border:1px solid var(--line);border-radius:15px;overflow:hidden}
+.panel-head{padding:11px 14px;background:#11203a;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.panel-head strong{font-size:14px}.mini{color:var(--muted);font-size:12px}
+.editor{display:grid;grid-template-columns:55px 1fr;height:480px}
+#lineNums{margin:0;background:#08111f;color:#56677f;padding:14px 9px 25px 0;text-align:right;white-space:pre;overflow:hidden;border-right:1px solid #1c2b42;font:13px/1.65 Consolas,monospace}
+#code{width:100%;height:100%;border:0;resize:none;outline:0;background:#091426;color:#e9f3ff;padding:14px 17px;font:13px/1.65 Consolas,monospace;tab-size:2}
+.log-wrap{padding:12px;border-top:1px solid var(--line);background:#0a1424}
+.log-title{font-size:12px;color:#b8c8dd;margin-bottom:7px}
+#compilerLog{width:100%;height:130px;resize:vertical;outline:0;border:1px solid #263954;border-radius:9px;background:#07101d;color:#d7e4f4;padding:10px;font:12px/1.55 Consolas,monospace}
+.tabs{display:flex;gap:6px;padding:9px;border-bottom:1px solid var(--line);background:#0b1627;overflow:auto}
+.tab{background:transparent;border-color:transparent;color:var(--muted)}.tab.active{background:#182a47;border-color:#344d75;color:#fff}
+.tab-content{display:none;padding:13px;max-height:624px;overflow:auto}.tab-content.active{display:block}
+.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+.card{background:#132039;border:1px solid var(--line);border-radius:10px;padding:9px}.num{font-size:19px;font-weight:800}.lab{font-size:11px;color:var(--muted)}
+.issue{background:#111f36;border:1px solid var(--line);border-radius:11px;padding:11px;margin-bottom:9px}
+.issue.error{border-left:4px solid var(--red)}.issue.warn{border-left:4px solid var(--yellow)}.issue.info{border-left:4px solid var(--cyan)}
+.issue-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.issue-title{font-weight:700;font-size:14px}
+.linebtn{border:1px solid #3a5073;background:#0a1526;color:#d6e6ff;border-radius:999px;padding:5px 8px;font-size:11px;white-space:nowrap}
+.issue p{margin:6px 0;color:#c4d0e0;font-size:12.5px;line-height:1.6}
+.easy{background:#091526;padding:8px 9px;border-radius:8px;margin-top:7px;color:#d6e6ff;font-size:12.5px;line-height:1.55}
+.fix{background:#09251d;border:1px solid #18503d;padding:8px 9px;border-radius:8px;margin-top:7px;color:#baf2d6;font-size:12.5px;line-height:1.55}
+.codefix{background:#06101d;border:1px solid #243850;padding:9px;border-radius:8px;margin-top:7px;white-space:pre-wrap;font:12px/1.55 Consolas,monospace;color:#dcf3e9}
+.empty{border:1px dashed #38506e;border-radius:11px;padding:16px;color:var(--muted);line-height:1.65;font-size:13px}
+.tip{padding:10px;border:1px solid var(--line);background:#101e34;border-radius:10px;margin-bottom:8px}.tip b{display:block;margin-bottom:4px}.tip span{font-size:12.5px;color:#c6d4e5;line-height:1.6}
+
+.sample-note{
+  margin:0 0 12px 0;padding:10px 12px;border:1px solid #284262;
+  background:#0d1b30;border-radius:10px;color:#b9cce7;font-size:12px;line-height:1.55
+}
+.support-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.support-chip{font-size:11px;padding:5px 8px;border-radius:999px;background:#10213a;border:1px solid #294664;color:#cfe1fa}
+
+@media(max-width:1050px){.layout{grid-template-columns:1fr}.tab-content{max-height:none}}
+
+/* ===== Mobile-first enhancements ===== */
+html,body{max-width:100%;overflow-x:hidden}
+body{-webkit-text-size-adjust:100%}
+.app{width:100%;padding:14px}
+header{align-items:flex-start}
+.toolbar{
+  display:flex;
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+  padding-bottom:6px;
+  scrollbar-width:thin;
+}
+.toolbar>*{flex:0 0 auto}
+.toolbar select{min-width:165px}
+.toolbar button{min-height:44px;padding:10px 14px}
+.support-row{
+  overflow-x:auto;
+  flex-wrap:nowrap;
+  -webkit-overflow-scrolling:touch;
+  padding-bottom:4px;
+}
+.support-chip{flex:0 0 auto}
+.layout{grid-template-columns:1fr}
+.editor{height:52vh;min-height:330px;max-height:560px}
+#code{font-size:14px;line-height:1.65;padding:14px}
+#lineNums{font-size:14px;line-height:1.65}
+#compilerLog{height:145px;font-size:13px}
+.tabs{
+  position:sticky;
+  top:0;
+  z-index:3;
+  overflow-x:auto;
+  flex-wrap:nowrap;
+  -webkit-overflow-scrolling:touch;
+}
+.tab{flex:0 0 auto;min-height:42px}
+.tab-content{max-height:none}
+.linebtn{min-height:36px;padding:7px 10px;font-size:12px}
+.issue{padding:12px}
+.issue-top{align-items:center}
+.summary{grid-template-columns:repeat(3,minmax(0,1fr))}
+.panel{border-radius:13px}
+.panel-head{padding:11px 12px}
+.log-wrap{padding:10px}
+h1{font-size:24px;line-height:1.2}
+.sub{font-size:12.5px;line-height:1.5}
+.badge{font-size:11px;max-width:100%;white-space:normal}
+.mobile-hint{
+  display:none;
+  margin:0 0 10px 0;
+  padding:9px 11px;
+  border-radius:10px;
+  background:#0d1b30;
+  border:1px solid #284262;
+  color:#b9cce7;
+  font-size:12px;
+  line-height:1.5
+}
+.mobile-actions{
+  display:none;
+  position:sticky;
+  bottom:0;
+  z-index:8;
+  gap:8px;
+  padding:8px 0 max(8px,env(safe-area-inset-bottom));
+  background:linear-gradient(to top,#07111f 75%,rgba(7,17,31,0));
+}
+.mobile-actions button{flex:1;min-height:46px;font-weight:700}
+.mobile-actions .secondary{background:#13233d}
+
+@media(max-width:700px){
+  .app{padding:10px}
+  header{display:block;margin-bottom:10px}
+  h1{font-size:21px}
+  .badge{display:inline-block;margin-top:9px}
+  .mobile-hint{display:block}
+  .toolbar{
+    margin-left:-2px;
+    margin-right:-2px;
+    gap:7px;
+  }
+  .toolbar select{min-width:150px;max-width:210px}
+  .toolbar button{font-size:12px;padding:10px 12px}
+  .support-row{margin-bottom:8px}
+  .layout{gap:10px}
+  .editor{
+    grid-template-columns:42px minmax(0,1fr);
+    height:48vh;
+    min-height:300px;
+  }
+  #lineNums{
+    padding-right:7px;
+    font-size:12px;
+  }
+  #code{
+    font-size:13px;
+    padding:12px 10px;
+    white-space:pre;
+    overflow:auto;
+  }
+  #compilerLog{
+    height:130px;
+    font-size:12px;
+  }
+  .panel-head{
+    min-height:44px;
+    gap:8px;
+  }
+  .panel-head strong{font-size:13px}
+  .mini{font-size:11px}
+  .tabs{padding:7px;gap:4px}
+  .tab{
+    padding:8px 10px;
+    font-size:12px;
+  }
+  .tab-content{padding:10px}
+  .summary{gap:6px}
+  .card{padding:8px}
+  .num{font-size:17px}
+  .issue-top{
+    flex-direction:column;
+    align-items:flex-start;
+  }
+  .linebtn{
+    width:100%;
+    text-align:center;
+  }
+  .issue p,.easy,.fix,.tip span{font-size:12px}
+  .codefix{font-size:11.5px;overflow-x:auto}
+  .mobile-actions{display:flex}
+}
+
+@media(max-width:420px){
+  .app{padding:8px}
+  h1{font-size:19px}
+  .sub{font-size:12px}
+  .toolbar select{min-width:140px}
+  .editor{
+    grid-template-columns:38px minmax(0,1fr);
+    height:45vh;
+    min-height:280px;
+  }
+  #code{font-size:12.5px}
+  #lineNums{font-size:11.5px}
+  .summary{grid-template-columns:1fr 1fr 1fr}
+  .sum-card,.card{min-width:0}
+}
+@supports(padding:max(0px)){
+  .app{
+    padding-left:max(10px,env(safe-area-inset-left));
+    padding-right:max(10px,env(safe-area-inset-right));
+    padding-bottom:max(10px,env(safe-area-inset-bottom));
+  }
+}
+
+
+.fix-section{
+  margin-top:10px;
+  border-top:1px solid #2b3f5e;
+  padding-top:10px;
+}
+.fix-label{
+  font-size:12px;
+  font-weight:700;
+  margin-bottom:6px;
+}
+.before-code,.after-code{
+  border-radius:8px;
+  padding:9px 10px;
+  white-space:pre-wrap;
+  word-break:break-word;
+  font:12px/1.55 Consolas,monospace;
+  overflow-x:auto;
+}
+.before-code{
+  background:#281318;
+  border:1px solid #65303a;
+  color:#ffc9cf;
+}
+.after-code{
+  background:#09251d;
+  border:1px solid #1a6048;
+  color:#c6f7df;
+}
+.result-jump{
+  margin:8px 0 0;
+  padding:8px 10px;
+  border-radius:8px;
+  background:#102442;
+  color:#cfe2ff;
+  font-size:12px;
+  line-height:1.5
+}
+
+</style>
+
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#07111f">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<div class="app">
+<header>
+  <div><h1>🧩 Code Doctor — IDE Error Helper</h1>
+  <div class="sub">วางโค้ด + Compiler Log แล้วแปล Error เป็นภาษาไทย พร้อมชี้บรรทัดและแนะนำวิธีแก้</div></div>
+  <div class="badge">Dev-C++ • Code::Blocks • VS Code • Visual Studio • Arduino • Python • Browser</div>
+</header>
+<div class="mobile-hint">
+  📱 มือถือ: เลื่อนแถบด้านบนซ้าย–ขวาเพื่อเลือกภาษาและตัวอย่าง แล้วแตะป้าย “บรรทัด” เพื่อกระโดดไปยังจุดที่ผิด
+</div>
+
+<div class="toolbar">
+  <select id="lang">
+    <option value="cpp">C++</option>
+    <option value="c">C</option>
+    <option value="python">Python</option>
+    <option value="js">JavaScript</option>
+    <option value="html">HTML</option>
+    <option value="css">CSS</option>
+  </select>
+  <select id="compiler">
+    <option value="auto">Compiler / IDE: Auto Detect</option>
+    <option value="gcc">Dev-C++ / GCC / G++</option>
+    <option value="codeblocks">Code::Blocks / MinGW</option>
+    <option value="vscode">VS Code + GCC/G++</option>
+    <option value="clang">Clang / LLVM</option>
+    <option value="msvc">Visual Studio / MSVC</option>
+    <option value="arduino">Arduino IDE</option>
+    <option value="python">Python / IDLE / Terminal</option>
+    <option value="browser">Browser Console</option>
+  </select>
+
+  <select id="sampleSelect">
+    <option value="">เลือกตัวอย่างเพื่อทดลอง...</option>
+    <option value="devcpp">Dev-C++: Printf พิมพ์ผิด</option>
+    <option value="codeblocks">Code::Blocks: ลืม ;</option>
+    <option value="vscode">VS Code + G++: ตัวแปรไม่ประกาศ</option>
+    <option value="visualstudio">Visual Studio: identifier not found</option>
+    <option value="arduino">Arduino IDE: ฟังก์ชันพิมพ์ผิด</option>
+    <option value="python">Python / IDLE: NameError</option>
+    <option value="javascript">Browser Console: ReferenceError</option>
+    <option value="html">HTML: ปิดแท็กไม่ตรง</option>
+    <option value="css">CSS: ลืม ; และ }</option>
+  </select>
+
+  <button class="primary" id="analyze">🔎 ตรวจสอบ</button>
+  <button id="loadSample" title="โหลดตัวอย่าง Error">▶ ตัวอย่าง</button>
+  <button id="clear">ล้าง</button>
+</div>
+
+<div class="support-row">
+  <span class="support-chip">Dev-C++ / MinGW</span>
+  <span class="support-chip">Code::Blocks</span>
+  <span class="support-chip">VS Code + GCC/G++</span>
+  <span class="support-chip">Visual Studio / MSVC</span>
+  <span class="support-chip">Arduino IDE</span>
+  <span class="support-chip">Python / IDLE</span>
+  <span class="support-chip">Chrome / Edge Console</span>
+</div>
+
+<div class="layout">
+<section class="panel">
+  <div class="panel-head"><strong>Source Code</strong><span class="mini" id="status">พร้อมตรวจ</span></div>
+  <div class="editor"><pre id="lineNums">1</pre><textarea id="code" spellcheck="false" placeholder="วางโค้ดที่นี่..."></textarea></div>
+  <div class="log-wrap">
+    <div class="log-title">Compiler Log / Error Message (วางข้อความ Error จาก Dev-C++, VS Code, Visual Studio, Terminal ฯลฯ)</div>
+    <textarea id="compilerLog" spellcheck="false" placeholder="ตัวอย่าง:
+C:\Dev-Cpp\Untitled2.cpp:3:21: error: 'Printf' was not declared in this scope"></textarea>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><strong>ผลวิเคราะห์</strong><span class="mini" id="count">0 จุด</span></div>
+  <div class="tabs">
+    <button class="tab active" data-tab="issues">ข้อผิดพลาด</button>
+    <button class="tab" data-tab="easy">อธิบายง่าย</button>
+    <button class="tab" data-tab="fixed">รวมวิธีแก้</button>
+  </div>
+  <div id="issues" class="tab-content active"><div class="empty">วางโค้ด หรือวาง Compiler Log แล้วกด “ตรวจสอบ” ระบบจะพยายามอ่าน Error ให้ใกล้เคียงกับ IDE</div></div>
+  <div id="easy" class="tab-content"><div class="empty">ระบบจะแปลข้อความ Error ทางเทคนิคให้เป็นภาษาไทยเข้าใจง่าย</div></div>
+  <div id="fixed" class="tab-content"><div class="empty">ระบบจะแสดงตัวอย่างแนวทางแก้สำหรับ Error ที่ตรวจพบ</div></div>
+</section>
+</div>
+<div class="mobile-actions">
+  <button class="primary" id="mobileAnalyze">🔎 ตรวจสอบ</button>
+  <button class="secondary" id="mobileTop">↑ ด้านบน</button>
+</div>
+</div>
+
+<script>
+const code=document.getElementById('code');
+const nums=document.getElementById('lineNums');
+const log=document.getElementById('compilerLog');
+const lang=document.getElementById('lang');
+const status=document.getElementById('status');
+const count=document.getElementById('count');
+
+function updateNums(){
+  const n=Math.max(1,code.value.split('\n').length);
+  nums.textContent=Array.from({length:n},(_,i)=>i+1).join('\n');
+}
+code.addEventListener('input',updateNums);
+code.addEventListener('scroll',()=>nums.scrollTop=code.scrollTop);
+code.addEventListener('keydown',e=>{
+  if(e.key==='Tab'){
+    e.preventDefault(); const s=code.selectionStart,en=code.selectionEnd;
+    code.value=code.value.slice(0,s)+'  '+code.value.slice(en);
+    code.selectionStart=code.selectionEnd=s+2; updateNums();
+  }
+});
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active'); document.getElementById(b.dataset.tab).classList.add('active');
+});
+
+function esc(s){return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;")}
+function add(a,type,title,line,col,raw,easy,fix,codefix=''){a.push({type,title,line,col,raw,easy,fix,codefix})}
+function goLine(n){
+  const ls=code.value.split('\n'); let p=0;
+  for(let i=0;i<n-1;i++)p+=ls[i].length+1;
+  code.focus(); code.setSelectionRange(p,p+(ls[n-1]?.length||0));
+  code.scrollTop=Math.max(0,(n-3)*22);
+}
+
+function sourceLine(n){
+  const ls=code.value.split('\n');
+  return ls[n-1] || '';
+}
+
+function autoFixedLine(item){
+  const original=sourceLine(item.line);
+  if(item.codefix) return item.codefix;
+
+  let fixed=original;
+  if(/Printf/.test(fixed)) fixed=fixed.replace(/\bPrintf\b/g,'printf');
+  if(/digitalWrit/.test(fixed)) fixed=fixed.replace(/\bdigitalWrit\b/g,'digitalWrite');
+
+  if(/main\s*\(\s*\)/.test(fixed) && !/\b(int|void)\s+main/.test(fixed)){
+    fixed=fixed.replace(/\bmain\s*\(\s*\)/,'int main()');
+  }
+
+  if(/อาจลืม ;|ขาดสัญลักษณ์|expected/i.test(item.title+' '+item.fix)){
+    const t=fixed.trim();
+    if(t && !/[;{}:]$/.test(t) && !/^\s*(if|for|while|switch|function)\b/.test(t)){
+      fixed=fixed.replace(/\s*$/,';');
+    }
+  }
+
+  if(fixed===original) return '';
+  return fixed.trim();
+}
+
+function parseCompilerLog(text,out){
+  const lines=text.split('\n').filter(Boolean);
+  lines.forEach(line=>{
+    let m;
+
+    // GCC/Clang: file:line:col: error: message
+    m=line.match(/^(.*?):(\d+):(\d+):\s*(error|warning|note):\s*(.*)$/i);
+    if(m){
+      const ln=+m[2], col=+m[3], type=m[4].toLowerCase()==='warning'?'warn':m[4].toLowerCase()==='note'?'info':'error';
+      explainCompilerMessage(out,type,m[5],ln,col,line);
+      return;
+    }
+
+    // Dev-C++ table-like: [Error] 'X' was not declared...
+    m=line.match(/\[Error\]\s*(.*)/i);
+    if(m){
+      explainCompilerMessage(out,'error',m[1],1,0,line);
+      return;
+    }
+
+    // MSVC: file(line,col): error Cxxxx: message
+    m=line.match(/^(.+?)\((\d+)(?:,(\d+))?\):\s*(error|warning)\s+[A-Z]?\d*:\s*(.*)$/i);
+    if(m){
+      explainCompilerMessage(out,m[4].toLowerCase()==='warning'?'warn':'error',m[5],+m[2],+(m[3]||0),line);
+      return;
+    }
+
+    // Browser Console: Uncaught ReferenceError / TypeError
+    m=line.match(/(?:Uncaught\s+)?(ReferenceError|TypeError|SyntaxError):\s*(.*?)(?:\s+at\s+.*?:(\d+):(\d+))?$/i);
+    if(m){
+      const kind=m[1], msg=m[2], ln=+(m[3]||1), col=+(m[4]||0);
+      let easy='JavaScript พบข้อผิดพลาดขณะทำงาน';
+      let fix='ตรวจบรรทัดที่แจ้งและค่าที่นำมาใช้งาน';
+      if(/ReferenceError/i.test(kind)){
+        easy='JavaScript เรียกใช้ชื่อที่ยังไม่ได้ประกาศ หรือสะกดชื่อไม่ตรง';
+        fix='ตรวจชื่อตัวแปร/ฟังก์ชันและประกาศก่อนนำไปใช้';
+      }else if(/TypeError/i.test(kind)){
+        easy='ค่าที่ใช้อยู่มีชนิดไม่ตรงกับคำสั่งหรือ method ที่เรียก';
+        fix='ตรวจค่าก่อนใช้งาน เช่น null/undefined และชนิดข้อมูล';
+      }else if(/SyntaxError/i.test(kind)){
+        easy='รูปแบบคำสั่ง JavaScript ไม่ถูกต้อง';
+        fix='ตรวจวงเล็บ quote comma และเครื่องหมายต่าง ๆ';
+      }
+      add(out,'error',kind,ln,col,line,easy,fix);
+      return;
+    }
+
+    // GCC/Arduino/MinGW sometimes show: file:line: error: message (no column)
+    m=line.match(/^(.*?):(\d+):\s*(error|warning|note):\s*(.*)$/i);
+    if(m){
+      const ln=+m[2], type=m[3].toLowerCase()==='warning'?'warn':m[3].toLowerCase()==='note'?'info':'error';
+      explainCompilerMessage(out,type,m[4],ln,0,line);
+      return;
+    }
+
+    // Python traceback line
+    m=line.match(/File\s+"(.+)",\s+line\s+(\d+)/i);
+    if(m){
+      add(out,'error','Python Traceback',+m[2],0,line,
+        'Python แจ้งว่าปัญหาเกิดใกล้บรรทัดนี้',
+        'ดูบรรทัดนี้ร่วมกับข้อความ Error บรรทัดสุดท้ายของ Traceback');
+    }
+
+    m=line.match(/^(SyntaxError|NameError|TypeError|IndentationError|ValueError|IndexError|KeyError):\s*(.*)$/);
+    if(m){
+      add(out,'error',m[1],1,0,line,
+        pythonExplain(m[1],m[2]),
+        pythonFix(m[1],m[2]));
+    }
+  });
+}
+
+function explainCompilerMessage(out,type,msg,ln,col,raw){
+  let title='Compiler Error', easy='Compiler พบข้อผิดพลาดที่ทำให้โค้ดทำงานหรือคอมไพล์ต่อไม่ได้', fix='ตรวจสอบบรรทัดที่แจ้งและข้อความ Error';
+  let codefix='';
+
+  if(/was not declared in this scope|undeclared identifier|use of undeclared identifier|identifier not found/i.test(msg)){
+    const id=(msg.match(/['‘`](.*?)['’`]/)||[])[1] || '';
+    title=`ไม่รู้จักชื่อ ${id||'ตัวแปร/ฟังก์ชัน'}`;
+    easy=`Compiler ไม่พบการประกาศชื่อ ${id||'นี้'} ก่อนนำมาใช้งาน อาจพิมพ์ชื่อผิด ตัวพิมพ์ใหญ่-เล็กไม่ตรง หรือยังไม่ได้ include/import`;
+    fix=`ตรวจสอบการสะกดชื่อ ${id||'ตัวแปร/ฟังก์ชัน'} และตรวจว่าประกาศหรือ include ไลบรารีที่เกี่ยวข้องแล้ว`;
+    if(id==='Printf'){
+      fix='C/C++ แยกตัวพิมพ์ใหญ่–เล็ก ให้เปลี่ยน Printf เป็น printf';
+      codefix='printf("Hello C ");';
+    }else if(id==='digitalWrit'){
+      fix='Arduino ใช้ฟังก์ชัน digitalWrite() ให้เติม e ต่อท้ายชื่อฟังก์ชัน';
+      codefix='digitalWrite(13, HIGH);';
+    }
+  } else if(/expected ['`].*['`]/i.test(msg)){
+    title='ขาดสัญลักษณ์ในโค้ด';
+    easy='Compiler คาดว่าจะพบสัญลักษณ์ เช่น ; ) } หรือ , แต่ไม่พบในตำแหน่งที่ควรมี';
+    fix='ตรวจดูช่วงท้ายบรรทัดนี้และบรรทัดก่อนหน้า ว่าวงเล็บหรือ ; ครบหรือไม่';
+  } else if(/expected .* before/i.test(msg)){
+    title='รูปแบบ Syntax ก่อนตำแหน่งนี้ไม่ถูกต้อง';
+    easy='จุดที่ Compiler ชี้อาจไม่ใช่ต้นเหตุจริงเสมอไป บ่อยครั้งเกิดจากบรรทัดก่อนหน้าขาด ; หรือวงเล็บ';
+    fix='ตรวจบรรทัดนี้และบรรทัดก่อนหน้าหนึ่งบรรทัด';
+  } else if(/no matching function|too many arguments|too few arguments/i.test(msg)){
+    title='จำนวนหรือชนิด Argument ไม่ตรง';
+    easy='คุณเรียกฟังก์ชันด้วยจำนวนค่า หรือชนิดข้อมูลไม่ตรงกับที่ฟังก์ชันกำหนด';
+    fix='ตรวจ signature ของฟังก์ชัน แล้วปรับจำนวน/ชนิด argument ให้ตรง';
+  } else if(/undefined reference/i.test(msg)){
+    title='Linker หา Function/ตัวแปรไม่เจอ';
+    easy='โค้ดผ่านขั้น compile แล้ว แต่ตอน link ไม่พบ implementation หรือ library ที่ต้องใช้';
+    fix='ตรวจว่ามีการสร้างฟังก์ชันนั้นจริง และ link library/source file ครบ';
+  } else if(/redefinition|already defined/i.test(msg)){
+    title='ประกาศซ้ำ';
+    easy='มีตัวแปร ฟังก์ชัน หรือ class ชื่อเดียวกันถูกประกาศมากกว่าหนึ่งครั้ง';
+    fix='ลบ declaration/definition ที่ซ้ำ หรือเปลี่ยนชื่อให้ไม่ชนกัน';
+  }
+
+  add(out,type,title,ln,col,raw,easy,fix,codefix);
+}
+
+function pythonExplain(type,msg){
+  const map={
+    SyntaxError:'รูปแบบคำสั่ง Python ไม่ถูกต้อง เช่น วงเล็บ quote หรือ colon ขาด',
+    NameError:'Python ไม่รู้จักชื่อตัวแปรหรือฟังก์ชันที่เรียกใช้',
+    TypeError:'ชนิดข้อมูลไม่เข้ากับ operation หรือ function ที่เรียก',
+    IndentationError:'การเยื้องบรรทัดไม่ถูกต้อง',
+    ValueError:'ชนิดข้อมูลถูก แต่ค่าที่ส่งเข้าไปไม่เหมาะสม',
+    IndexError:'เข้าถึงตำแหน่ง list เกินขอบเขต',
+    KeyError:'เรียก key ที่ไม่มีอยู่ใน dictionary'
+  }; return map[type]||msg;
+}
+function pythonFix(type,msg){
+  const map={
+    SyntaxError:'ตรวจเครื่องหมาย (), [], {}, quote, colon : และบรรทัดก่อนหน้า',
+    NameError:'ตรวจการสะกดชื่อและประกาศตัวแปรก่อนใช้งาน',
+    TypeError:'ตรวจชนิดข้อมูลด้วย type() และ argument ของฟังก์ชัน',
+    IndentationError:'จัด indentation ให้ระดับเดียวกัน โดยนิยมใช้ 4 spaces',
+    ValueError:'ตรวจค่าที่ส่งเข้า function และแปลงข้อมูลให้ถูกต้อง',
+    IndexError:'ตรวจ len(list) ก่อนเข้าถึง index',
+    KeyError:'ตรวจ key ก่อนด้วย `key in dict` หรือใช้ dict.get()'
+  }; return map[type]||'ตรวจข้อความ Error และบรรทัดที่แจ้ง';
+}
+
+function staticChecks(text,l,out){
+  const ls=text.split('\n');
+
+  if(l==='cpp'||l==='c'){
+    ls.forEach((s,i)=>{
+      if(/\bPrintf\s*\(/.test(s)){
+        add(out,'error','พิมพ์ printf ผิดตัวพิมพ์ใหญ่–เล็ก',i+1,s.indexOf('Printf')+1,s.trim(),
+          'ภาษา C/C++ แยกตัวพิมพ์ใหญ่กับตัวพิมพ์เล็ก `Printf` จึงไม่ใช่ฟังก์ชันเดียวกับ `printf`',
+          'แก้ `Printf` เป็น `printf`',
+          s.replace('Printf','printf').trim());
+      }
+      if(/^\s*main\s*\(\s*\)/.test(s)){
+        add(out,'warn','ควรกำหนดชนิดคืนค่าของ main()',i+1,1,s.trim(),
+          'มาตรฐาน C/C++ ควรเขียน main ให้มีชนิดคืนค่าเป็น int',
+          'ใช้ `int main()` และคืนค่า `return 0;` ตอนจบ',
+          'int main()');
+      }
+      if(/\bprintf\s*\(/.test(s) && !/#include\s*[<"]stdio\.h[>"]/.test(text) && !/#include\s*<cstdio>/.test(text)){
+        add(out,'warn','ใช้ printf แต่ยังไม่พบ header',i+1,1,s.trim(),
+          'ฟังก์ชัน printf ถูกประกาศใน stdio.h / cstdio',
+          l==='c'?'เพิ่ม `#include <stdio.h>`':'เพิ่ม `#include <cstdio>` หรือใช้ `#include <stdio.h>`');
+      }
+    });
+  }
+
+  if(l==='js'){
+    try{new Function(text)}catch(e){
+      add(out,'error','JavaScript Syntax Error',1,0,String(e.message),
+        'JavaScript อ่าน syntax ต่อไม่ได้',
+        'ตรวจวงเล็บ quote comma และบรรทัดใกล้จุดที่แจ้ง');
+    }
+  }
+
+  if(l==='html'){
+    const stack=[], re=/<\/?([a-z][\w-]*)\b[^>]*>/gi, voids=new Set(['img','br','hr','input','meta','link','source','area','base','embed','param','track','wbr']); let m;
+    while((m=re.exec(text))){
+      const tag=m[1].toLowerCase(), raw=m[0];
+      if(voids.has(tag)||raw.endsWith('/>'))continue;
+      if(raw.startsWith('</')){
+        if(stack.length&&stack[stack.length-1].tag===tag)stack.pop();
+        else add(out,'error','แท็ก HTML ปิดไม่ตรง',text.slice(0,m.index).split('\n').length,0,raw,'ลำดับแท็กเปิด/ปิดไม่ตรงกัน','ตรวจแท็กก่อนหน้าและปิดให้ตรงคู่');
+      }else stack.push({tag,line:text.slice(0,m.index).split('\n').length});
+    }
+    stack.forEach(x=>add(out,'error',`แท็ก <${x.tag}> ยังไม่ปิด`,x.line,0,'','มีแท็กเปิดแต่ไม่มีแท็กปิด',`เพิ่ม </${x.tag}>`));
+  }
+
+  if(l==='css'){
+    let bal=0;
+    ls.forEach((s,i)=>{
+      for(const ch of s){if(ch==='{')bal++;if(ch==='}')bal--;}
+      const t=s.trim();
+      if(t.includes(':')&&!t.endsWith(';')&&!t.endsWith('{')&&!t.endsWith('}')) add(out,'warn','อาจลืม ;',i+1,0,t,'CSS property มักควรปิดท้ายด้วย ;','เพิ่ม ; ท้ายบรรทัด');
+    });
+    if(bal!==0)add(out,'error','วงเล็บปีกกา CSS ไม่ครบ',ls.length,0,'','จำนวน { และ } ไม่เท่ากัน','ตรวจ block CSS ที่ยังเปิดหรือปิดไม่ครบ');
+  }
+}
+
+function dedupe(a){
+  const seen=new Set();
+  return a.filter(x=>{
+    const k=[x.title,x.line,x.raw].join('|');
+    if(seen.has(k))return false; seen.add(k); return true;
+  });
+}
+
+function render(items){
+  items=dedupe(items);
+  count.textContent=`${items.length} จุด`;
+  const e=items.filter(x=>x.type==='error').length,w=items.filter(x=>x.type==='warn').length,inf=items.filter(x=>x.type==='info').length;
+  if(!items.length){
+    document.getElementById('issues').innerHTML='<div class="empty" style="color:#baf2d6;border-color:#266047">✅ ยังไม่พบข้อผิดพลาดพื้นฐานจากตัวตรวจนี้</div>';
+    document.getElementById('easy').innerHTML='<div class="tip"><b>หมายเหตุ</b><span>ควรกด Compile/Run ใน IDE จริงอีกครั้ง เพราะบาง error ต้องอาศัย compiler และ library ของโปรเจกต์</span></div>';
+    document.getElementById('fixed').innerHTML='<div class="empty">ไม่มีคำแนะนำเพิ่มเติมในขณะนี้</div>'; return;
+  }
+
+  document.getElementById('issues').innerHTML=`
+  <div class="summary">
+    <div class="card"><div class="num">${e}</div><div class="lab">Error</div></div>
+    <div class="card"><div class="num">${w}</div><div class="lab">Warning</div></div>
+    <div class="card"><div class="num">${inf}</div><div class="lab">Info</div></div>
+  </div>`+
+  items.map(x=>{
+    const before=sourceLine(x.line);
+    const after=autoFixedLine(x);
+    return `<div class="issue ${x.type}">
+      <div class="issue-top">
+        <div class="issue-title">${esc(x.title)}</div>
+        <button class="linebtn" onclick="goLine(${x.line})">บรรทัด ${x.line}${x.col?`, คอลัมน์ ${x.col}`:''}</button>
+      </div>
+      ${x.raw?`<p><b>ข้อความจาก Compiler:</b> ${esc(x.raw)}</p>`:''}
+      <div class="easy"><b>ผิดเพราะอะไร:</b> ${esc(x.easy)}</div>
+      <div class="fix"><b>วิธีแก้:</b> ${esc(x.fix)}</div>
+      ${(before||after)?`
+      <div class="fix-section">
+        ${before?`<div class="fix-label">❌ ก่อนแก้ — บรรทัด ${x.line}</div><div class="before-code">${esc(before)}</div>`:''}
+        ${after?`<div class="fix-label" style="margin-top:8px">✅ แนะนำให้แก้เป็น</div><div class="after-code">${esc(after)}</div>`:''}
+      </div>`:''}
+      <div class="result-jump">แตะปุ่ม “บรรทัด ${x.line}” ด้านบน เพื่อกลับไปยังจุดที่ผิดใน Source Code</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('easy').innerHTML=items.map(x=>`<div class="tip"><b>บรรทัด ${x.line}: ${esc(x.title)}</b><span>${esc(x.easy)}</span></div>`).join('');
+  document.getElementById('fixed').innerHTML=items.map(x=>`<div class="tip"><b>บรรทัด ${x.line}</b><span>${esc(x.fix)}</span>${x.codefix?`<div class="codefix">${esc(x.codefix)}</div>`:''}</div>`).join('');
+}
+
+document.getElementById('analyze').onclick=()=>{
+  const out=[];
+  if(log.value.trim())parseCompilerLog(log.value,out);
+  if(code.value.trim())staticChecks(code.value,lang.value,out);
+  render(out);
+
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(x=>x.classList.remove('active'));
+  document.querySelector('[data-tab="issues"]')?.classList.add('active');
+  document.getElementById('issues')?.classList.add('active');
+
+  status.textContent=out.some(x=>x.type==='error')
+    ?`พบ Error/ข้อควรแก้ ${out.filter(x=>x.type==='error').length} จุด`
+    :'ตรวจเสร็จแล้ว';
+
+  if(window.innerWidth<=700){
+    setTimeout(()=>{
+      document.getElementById('issues')?.scrollIntoView({behavior:'smooth',block:'start'});
+    },80);
+  }
+};
+
+const sampleSelect=document.getElementById('sampleSelect');
+
+const samples={
+  devcpp:{
+    lang:'cpp', compiler:'gcc',
+    code:`#include <stdio.h>
+main()
+{ Printf ("Hello C ");
+printf("I Love U \\n") ;
+}`,
+    log:`C:\\Dev-Cpp\\Untitled2.cpp: In function 'int main()':
+C:\\Dev-Cpp\\Untitled2.cpp:3:21: error: 'Printf' was not declared in this scope`,
+    note:'Dev-C++ / MinGW: ตัวอย่างเดียวกับภาพของคุณ — Printf ต้องเป็น printf'
+  },
+
+  codeblocks:{
+    lang:'cpp', compiler:'codeblocks',
+    code:`#include <iostream>
+using namespace std;
+
+int main()
+{
+    int age = 18
+    cout << age << endl;
+    return 0;
+}`,
+    log:`main.cpp: In function 'int main()':
+main.cpp:6:5: error: expected ',' or ';' before 'cout'`,
+    note:'Code::Blocks / MinGW: ต้นเหตุจริงอยู่บรรทัดก่อนหน้า เพราะลืม ; หลัง int age = 18'
+  },
+
+  vscode:{
+    lang:'cpp', compiler:'vscode',
+    code:`#include <iostream>
+using namespace std;
+
+int main() {
+    cout << score << endl;
+    return 0;
+}`,
+    log:`main.cpp: In function 'int main()':
+main.cpp:5:13: error: 'score' was not declared in this scope`,
+    note:'VS Code + G++: ใช้ตัวแปร score ก่อนประกาศ'
+  },
+
+  visualstudio:{
+    lang:'cpp', compiler:'msvc',
+    code:`#include <iostream>
+using namespace std;
+
+int main()
+{
+    cout << total << endl;
+    return 0;
+}`,
+    log:`C:\\Project\\main.cpp(6,13): error C2065: 'total': undeclared identifier`,
+    note:'Visual Studio / MSVC: รูปแบบ Error จะเป็น file(line,column): error Cxxxx'
+  },
+
+  arduino:{
+    lang:'cpp', compiler:'arduino',
+    code:`void setup() {
+  pinMode(13, OUTPUT);
+}
+
+void loop() {
+  digitalWrit(13, HIGH);
+}`,
+    log:`C:\\Users\\Student\\Arduino\\Blink\\Blink.ino: In function 'void loop()':
+C:\\Users\\Student\\Arduino\\Blink\\Blink.ino:6:3: error: 'digitalWrit' was not declared in this scope`,
+    note:'Arduino IDE: digitalWrit พิมพ์ผิด ต้องเป็น digitalWrite'
+  },
+
+  python:{
+    lang:'python', compiler:'python',
+    code:`name = "Somchai"
+print(namme)`,
+    log:`Traceback (most recent call last):
+  File "C:\\work\\test.py", line 2, in <module>
+    print(namme)
+NameError: name 'namme' is not defined`,
+    note:'Python / IDLE: namme สะกดไม่ตรงกับตัวแปร name'
+  },
+
+  javascript:{
+    lang:'js', compiler:'browser',
+    code:`const username = "student";
+console.log(userName);`,
+    log:`Uncaught ReferenceError: userName is not defined at app.js:2:13`,
+    note:'Chrome / Edge Console: JavaScript แยกตัวพิมพ์ใหญ่–เล็ก username กับ userName ไม่ใช่ชื่อเดียวกัน'
+  },
+
+  html:{
+    lang:'html', compiler:'browser',
+    code:`<!doctype html>
+<html>
+<body>
+  <div>
+    <h1>Hello</div>
+  </h1>
+
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
+  });
+}
+</script>
+</body>
+</html>`,
+    log:``,
+    note:'HTML: ตัวตรวจจะดูโครงสร้างแท็กเปิด/ปิด แม้ไม่มี Compiler Log'
+  },
+
+  css:{
+    lang:'css', compiler:'browser',
+    code:`body {
+  background: #111;
+  color: white
+  padding: 20px;
+
+.card {
+  width: 300px;
+}`,
+    log:``,
+    note:'CSS: มีทั้ง ; ที่ขาด และวงเล็บ } ที่ขาด'
+  }
+};
+
+document.getElementById('loadSample').onclick=()=>{
+  const key=sampleSelect.value;
+  if(!key || !samples[key]){
+    status.textContent='กรุณาเลือกตัวอย่างก่อน';
+    return;
+  }
+  const s=samples[key];
+  lang.value=s.lang;
+  document.getElementById('compiler').value=s.compiler;
+  code.value=s.code;
+  log.value=s.log;
+  updateNums();
+  status.textContent='โหลดตัวอย่างแล้ว';
+  document.getElementById('analyze').click();
+
+  const easy=document.getElementById('easy');
+  easy.insertAdjacentHTML('afterbegin', `<div class="sample-note"><b>ตัวอย่างนี้:</b> ${esc(s.note)}</div>`);
+};
+
+document.getElementById('clear').onclick=()=>{
+  code.value='';log.value='';updateNums();count.textContent='0 จุด';status.textContent='พร้อมตรวจ';
+  document.getElementById('issues').innerHTML='<div class="empty">วางโค้ด หรือวาง Compiler Log แล้วกด “ตรวจสอบ”</div>';
+  document.getElementById('easy').innerHTML='<div class="empty">ระบบจะแปล Error เป็นภาษาไทยเข้าใจง่าย</div>';
+  document.getElementById('fixed').innerHTML='<div class="empty">ระบบจะแนะนำวิธีแก้ตาม Error ที่พบ</div>';
+};
+document.getElementById('mobileAnalyze')?.addEventListener('click',()=>{
+  document.getElementById('analyze').click();
+});
+document.getElementById('mobileTop')?.addEventListener('click',()=>{
+  window.scrollTo({top:0,behavior:'smooth'});
+});
+updateNums();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "Code Doctor IDE Error Helper",
+  "short_name": "Code Doctor",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#07111f",
+  "theme_color": "#07111f",
+  "description": "ตรวจ Error จาก Dev-C++, Code::Blocks, VS Code, Visual Studio, Arduino, Python และ Browser Console"
+}
