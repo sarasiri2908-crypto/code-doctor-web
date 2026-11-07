@@ -832,16 +832,17 @@ document.getElementById('mobileTop')?.addEventListener('click',()=>{
 updateNums();
 </script>
 
+
 <!-- Code DoctorSiRi Arduino add-on: original design preserved -->
 <script>
-/* Code DoctorSiRi Arduino Diagnostics Add-on v2.1
+/* Code DoctorSiRi Arduino Diagnostics Add-on v3.0
  * Drop-in detection layer; does not alter existing HTML, CSS or original functions.
  * Offline, no external libraries or network use.
  */
 (function (root) {
   'use strict';
 
-  const VERSION = '2.1.0';
+  const VERSION = '3.0.0';
   const textAt = (s, ln) => String(s).replace(/\r\n?/g, '\n').split('\n')[Math.max(0, ln - 1)] || '';
   function locationAt(source, index) {
     let line = 1, lastBreak = -1;
@@ -996,117 +997,286 @@ updateNums();
     return issues.sort((a,b) => a.line-b.line || (a.type==='duplicate'?-1:1));
   }
 
-  function installUI() {
-    if (typeof document === 'undefined' || root.__CODE_DOCTOR_ADDON_NO_UI__) return;
-    const blockId = 'codesiri-arduino-addon-results-v2';
-    function pickSource() {
-      for (const selector of [
-        '#source','#code','#sourceCode','#codeInput','#codeEditor','#editor',
-        'textarea[name="source"]','textarea[name="code"]',
-        'textarea[id*="code" i]', 'textarea:not([id*="log" i])'
-      ]) {
-        const e = document.querySelector(selector);
-        if (e && ((e.tagName === 'TEXTAREA') || (e.tagName === 'INPUT' && e.type === 'text'))) return e;
+  // This adapter deliberately does not depend on IDs from one specific
+  // version of Code DoctorSiRi. It supports textarea, Ace, CodeMirror,
+  // Monaco and contenteditable-based editors.
+  const MOUNT_ID = 'codesiri-arduino-fix-v3';
+  const STYLE_ID = 'codesiri-arduino-fix-v3-styles';
+  const SCAN_RE = /\bvoid\s+(?:setup|loop)\s*\(/;
+  let lastHadIssues = false;
+  let scanTickets = [];
+  let lastEditor = null;
+  let lastResultRoot = null;
+  let lastAutoCount = [];
+
+  function readTextEditor() {
+    function textareaValue(element) {
+      return element && typeof element.value === 'string' ? element.value : '';
+    }
+    const priority = [
+      '#source', '#sourceCode', '#source-code', '#codeInput', '#codeEditor',
+      '#code', '#editor', '#arduinoCode', '#codeText',
+      'textarea[name="source"]', 'textarea[name="code"]',
+      '.source-editor textarea', '.code-editor textarea',
+      '[aria-label*="Source" i] textarea'
+    ];
+    for (const sel of priority) {
+      try {
+        const el = document.querySelector(sel);
+        if (el && (el.matches('textarea') || el.matches('input[type="text"]'))) {
+          const value=textareaValue(el);
+          if (value.trim() || !document.querySelector('.monaco-editor,.CodeMirror,.ace_editor,.cm-editor'))
+            return {value, element:el, kind:'textarea', jump:jumpTextarea};
+        }
+      } catch (_) { /* unsupported selector */ }
+    }
+    const textareas = Array.from(document.querySelectorAll('textarea'));
+    const ranked = textareas.map(el => {
+      const hint = [el.id,el.name,el.placeholder,el.getAttribute('aria-label')].join(' ');
+      const string = textareaValue(el);
+      let score = (SCAN_RE.test(string) ? 100 : 0) +
+        (/source|code|editor|โค้ด/i.test(hint) ? 30 : 0) -
+        (/log|error|compiler|stderr|message|ข้อความผิดพลาด/i.test(hint) ? 150 : 0) +
+        Math.min(15,string.length / 1000);
+      return {el,string,score};
+    }).sort((a,b) => b.score-a.score);
+    if (ranked.length && ranked[0].score >= 0 &&
+        (ranked[0].string.trim() || !document.querySelector('.monaco-editor,.CodeMirror,.ace_editor,.cm-editor'))) {
+      const x=ranked[0];
+      return {value:x.string,element:x.el,kind:'textarea',jump:jumpTextarea};
+    }
+    // Monaco keeps its models in JS rather than a normal textarea.
+    try {
+      if (root.monaco?.editor?.getModels) {
+        const models = root.monaco.editor.getModels();
+        const model = models.find(m => SCAN_RE.test(m.getValue())) || models[0];
+        if (model) return {value:model.getValue(),element:document.querySelector('.monaco-editor'),
+          kind:'monaco',jump:jumpMonaco};
       }
-      return null;
+    } catch (_) {}
+    // CodeMirror 5 has a model on the editor DOM node.
+    for (const el of document.querySelectorAll('.CodeMirror')) {
+      try {
+        if (el.CodeMirror?.getValue) return {value:el.CodeMirror.getValue(),element:el,
+          kind:'codemirror5',jump:(editor,line)=>el.CodeMirror.setCursor(line-1,0)};
+      } catch (_) {}
     }
-    function relevant(code) {
-      const selects = [
-        '#lang','#language','#codeLanguage','#languageSelect','#ide','#compilerType'
-      ].map(s => document.querySelector(s)).filter(Boolean);
-      const values = selects.map(e => String(e.value||'') + ' ' + String(e.options?.[e.selectedIndex]?.text || ''));
-      if (values.some(v => /arduino/i.test(v))) return true;
-      const explicitLanguage = values.some(v => /\b(?:python|javascript|html|css|php)\b/i.test(v));
-      if (explicitLanguage) return false;
-      return /\bvoid\s+(?:setup|loop)\s*\(/.test(maskNonCode(code));
+    // Ace editor instances carry the model on env.editor.
+    for (const el of document.querySelectorAll('.ace_editor')) {
+      try {
+        if (el.env?.editor?.getValue) return {value:el.env.editor.getValue(),element:el,
+          kind:'ace',jump:(editor,line)=>el.env.editor.gotoLine(line,0,true)};
+      } catch (_) {}
     }
-    function outputTarget() {
-      for (const selector of [
-        '#results', '#result', '#analysisResults', '#analysisResult',
-        '#resultPanel', '#output', '.results', '.result-panel',
-        '.results-container', '#tab-issues', '#panel-issues'
-      ]) {
-        const e = document.querySelector(selector);
-        if (e) return selector === '#tab-issues' ? e.parentElement : e;
-      }
-      const e = pickSource();
-      return e?.closest('section,article,.card,.panel')?.parentElement || e?.parentElement;
+    // CodeMirror 6 and other contenteditable editor implementations.
+    for (const el of document.querySelectorAll('.cm-editor,.monaco-editor,.ace_editor,[contenteditable="true"]')) {
+      const lineNodes=el.querySelectorAll('.cm-line,.view-line,.ace_line');
+      const code=lineNodes.length
+        ? Array.from(lineNodes).map(x=>x.innerText||x.textContent||'').join('\n')
+        : (el.innerText||el.textContent||'');
+      if (SCAN_RE.test(code)) return {value:code,element:el,kind:'contenteditable',jump:jumpGeneric};
     }
-    function addText(parent, tag, className, value) {
-      const e = document.createElement(tag);
-      if (className) e.className = className;
-      e.textContent = value;
-      parent.appendChild(e);
-      return e;
-    }
-    function goToLine(editor, line, column) {
-      const str=editor.value.replace(/\r\n?/g, '\n'), rows = str.split('\n');
-      const offset = rows.slice(0, line-1).reduce((n, row) => n+row.length+1, 0);
-      const from=Math.min(offset + Math.max(0,column-1),editor.value.length);
-      const to=Math.min(offset+(rows[line-1]?.length||0),editor.value.length);
-      editor.focus(); editor.setSelectionRange(from,to);
-      const computed=root.getComputedStyle?.(editor);
-      const lh=parseFloat(computed?.lineHeight)||22;
-      editor.scrollTop=Math.max(0,(line-1)*lh-editor.clientHeight/3);
-      editor.scrollIntoView({behavior:'smooth',block:'nearest'});
-    }
-    function render() {
-      const current=document.getElementById(blockId), editor=pickSource();
-      if (current) current.remove();
-      if (!editor || !editor.value.trim() || !relevant(editor.value)) return;
-      const issues=analyze(editor.value);
-      if (!issues.length) return;
-      // When an existing analyzer exposes the same diagnostics, only show
-      // genuinely new findings; this avoids reporting the same fault twice.
-      const prior=root.CodeDoctorSiRiAnalyzer;
-      let visible=issues;
-      if (prior && typeof prior.analyze === 'function') {
-        try {
-          const old=prior.analyze(editor.value, '', 'arduino', 'arduino');
-          visible=issues.filter(item => !old.some(d =>
-            d.line === item.line &&
-            ((item.type==='duplicate' && /^duplicate-/.test(d.key||'')) ||
-             (item.type==='nested' && /^nested-/.test(d.key||'')))));
-        } catch (_) { /* original analyzer may have another signature */ }
-      }
-      if (!visible.length) return;
-      const target=outputTarget(); if (!target) return;
-      const section=document.createElement('section'); section.id=blockId;
-      section.setAttribute('aria-label','ผลตรวจ Arduino เพิ่มเติม');
-      section.style.cssText='box-sizing:border-box;margin:16px 0;padding:16px;border:1px solid #d4e4d9;border-radius:12px;background:#fff;color:#18352f;box-shadow:0 2px 12px #15372612;max-width:100%;overflow:hidden';
-      addText(section,'h3','',`ตรวจ Arduino เพิ่มเติม: พบ ${visible.length} ข้อผิดพลาด`).style.cssText='font:700 17px/1.5 system-ui,Tahoma,sans-serif;margin:0 0 12px';
-      for(const i of visible) {
-        const card=document.createElement('div');card.style.cssText='background:#fff9f9;border:1px solid #ecd8da;border-left:4px solid #d44650;border-radius:9px;padding:12px;margin:10px 0;font:14px/1.6 system-ui,Tahoma,sans-serif';
-        addText(card,'strong','',i.title);
-        const btn=document.createElement('button');btn.type='button';btn.textContent=`บรรทัด ${i.line}`;
-        btn.style.cssText='display:inline-block;margin-left:8px;padding:5px 9px;border:1px solid #b6d8c8;border-radius:7px;background:#ecf8f1;color:#125441;font-weight:700;cursor:pointer';
-        btn.addEventListener('click',()=>goToLine(editor,i.line,i.column));card.appendChild(btn);
-        addText(card,'p','',`สาเหตุ: ${i.cause}`).style.cssText='margin:8px 0';
-        addText(card,'p','',`วิธีแก้: ${i.fix}`).style.cssText='margin:8px 0';
-        const pre=document.createElement('pre');pre.textContent=i.before;
-        pre.style.cssText='margin:8px 0 0;background:#142423;color:#e6f9ef;padding:9px 11px;border-radius:7px;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.5 Consolas,monospace';card.appendChild(pre);
-        section.appendChild(card);
-      }
-      target.appendChild(section);
-    }
-    function isAnalyzeAction(node) {
-      const button=node.closest?.('button,input[type="button"],input[type="submit"],[role="button"]');
-      if (!button) return false;
-      const text=(button.textContent||button.value||'').trim(), id=button.id||'';
-      if (/load|example|clear|reset|copy|top|tab|example/i.test(id)) return false;
-      return /(?:analy[sz]e|check|ตรวจ|วิเคราะห์)/i.test(text+' '+id);
-    }
-    document.addEventListener('click',e=>{
-      if(!isAnalyzeAction(e.target)) return;
-      root.setTimeout(render,75);
-    },true);
-    document.addEventListener('submit',()=>root.setTimeout(render,75),true);
-    root.CodeDoctorSiRiArduinoRefresh=render;
+    // Last resort: source code is presented as <pre><code> (read-only preview).
+    const codeBlocks=Array.from(document.querySelectorAll('pre, pre code, .code-content'));
+    const block=codeBlocks.find(el=>SCAN_RE.test(el.textContent||''));
+    if(block) return {value:block.textContent||'',element:block,kind:'pre',jump:jumpGeneric};
+    return {value:'',element:null,kind:'missing',jump:jumpGeneric};
   }
 
-  root.CodeDoctorSiRiArduinoAddon={VERSION, maskNonCode, findFunctionDefinitions, analyze};
-  if (typeof document !== 'undefined') {
-    if (document.readyState==='loading') document.addEventListener('DOMContentLoaded',installUI,{once:true});
+  function jumpTextarea(editor,line,column){
+    const el=editor.element;
+    if(!el || typeof el.setSelectionRange!=='function') return;
+    const code=String(el.value).replace(/\r\n?/g,'\n');
+    const rows=code.split('\n');
+    const base=rows.slice(0,Math.max(0,line-1)).reduce((n,r)=>n+r.length+1,0);
+    const from=Math.min(el.value.length,base+Math.max(0,(column||1)-1));
+    el.focus();el.setSelectionRange(from,Math.min(el.value.length,base+(rows[line-1]||'').length));
+    const computed=root.getComputedStyle?.(el);
+    const lh=parseFloat(computed?.lineHeight)||22;
+    el.scrollTop=Math.max(0,(line-1)*lh-el.clientHeight/3);
+    el.scrollIntoView({block:'nearest',behavior:'smooth'});
+  }
+  function jumpMonaco(editor,line){
+    try {
+      const editors=root.monaco?.editor?.getEditors?.() || [];
+      const instance=editors[0];
+      if(instance){instance.revealLineInCenter(line);instance.setPosition({lineNumber:line,column:1});instance.focus();}
+      else editor.element?.scrollIntoView({block:'nearest'});
+    }catch(_){jumpGeneric(editor,line);}
+  }
+  function jumpGeneric(editor){editor.element?.scrollIntoView({block:'nearest',behavior:'smooth'});}
+
+  function isArduino(code) {
+    if (SCAN_RE.test(maskNonCode(code))) return true;
+    const selectors = 'select, [role="combobox"]';
+    return Array.from(document.querySelectorAll(selectors)).some(el => {
+      const value=el.value || el.getAttribute('aria-label') || el.textContent || '';
+      return /arduino/i.test(value);
+    });
+  }
+  function matchingTitle(el,matcher) {
+    return matcher.test((el.textContent||'').replace(/\s+/g,' ').trim()) &&
+      (el.textContent||'').trim().length < 120;
+  }
+  function resultRoot() {
+    for(const sel of ['#results','#resultPanel','#analysisResults','#analysisResult',
+      '#result','#analysis','.analysis-results','.analysis-panel','.result-panel',
+      '.results','.results-container']) {
+      const el=document.querySelector(sel);
+      if(el && el !== lastEditor?.element) return el;
+    }
+    const titles=Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,.section-title,.panel-title,.card-title,.result-title,strong'));
+    const label=titles.find(el=>matchingTitle(el,/ผลวิเคราะห์|ผลการตรวจสอบ|ผลการวิเคราะห์|analysis results|diagnostics|ตรวจพบข้อผิดพลาด/i));
+    if(label) return label.closest('section,article,.panel,.card,[role="region"]') || label.parentElement?.parentElement || label.parentElement;
+    const src=lastEditor?.element;
+    return src?.closest('section,article,.panel,.card')?.parentElement || document.querySelector('main') || document.body;
+  }
+  function styleOnce(){
+    if(document.getElementById(STYLE_ID)) return;
+    const st=document.createElement('style');st.id=STYLE_ID;
+    st.textContent=`
+#${MOUNT_ID} {margin:12px 10px;padding:0;color:inherit;font-family:inherit;max-width:100%;}
+#${MOUNT_ID} .siri-heading {font-size:14px;font-weight:750;margin:0 0 10px;color:inherit;}
+#${MOUNT_ID} .siri-issue {border:1px solid rgba(203,76,76,.45);border-left:4px solid #e15e5e;background:rgba(208,77,77,.08);border-radius:10px;padding:12px 14px;margin:10px 0;font:inherit;color:inherit;min-width:0;}
+#${MOUNT_ID} .siri-top {display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap;}
+#${MOUNT_ID} .siri-title {font-weight:750;flex:1;min-width:160px;}
+#${MOUNT_ID} .siri-line {cursor:pointer;background:rgba(80,163,129,.15);color:inherit;border:1px solid rgba(77,167,127,.55);border-radius:7px;padding:4px 8px;font:inherit;font-size:13px;}
+#${MOUNT_ID} p {margin:8px 0 0;font-size:13px;line-height:1.7;overflow-wrap:anywhere;}
+#${MOUNT_ID} code {font-family:Consolas,monospace;background:rgba(127,127,127,.12);padding:0 4px;border-radius:3px;}
+#${MOUNT_ID} .siri-line:focus-visible {outline:2px solid #6fc5a0;outline-offset:2px;}
+@media(max-width:600px){#${MOUNT_ID}{margin:10px 6px}#${MOUNT_ID} .siri-issue{padding:10px}#${MOUNT_ID} p{font-size:13px}}
+`;
+    (document.head||document.documentElement).appendChild(st);
+  }
+  function appendText(el,tag,cls,value){
+    const child=document.createElement(tag);if(cls)child.className=cls;child.textContent=value;el.appendChild(child);return child;
+  }
+  function mountInto(rootNode){
+    // This works both when a site has .tabs/.tabpanel and when it has only
+    // a results card. Keep original DOM intact; insert only our own section.
+    const anchor=rootNode.querySelector('.tabs,[role="tablist"],.tab-list,.result-tabs,.analysis-tabs');
+    const el=document.createElement('div');el.id=MOUNT_ID;el.setAttribute('role','status');el.setAttribute('aria-live','polite');
+    if(anchor?.parentNode===rootNode) anchor.insertAdjacentElement('afterend',el);
+    else if(anchor) anchor.insertAdjacentElement('afterend',el);
+    else rootNode.appendChild(el);
+    return el;
+  }
+  function findZeroCounters(rootNode){
+    const candidates=Array.from(rootNode.querySelectorAll('span,strong,b,small,div'));
+    return candidates.filter(el=>{
+      if(el.querySelector('span,strong,b,div')) return false;
+      return /^0\s*(?:จุด|ข้อ|รายการ|errors?|ข้อผิดพลาด)$/i.test((el.textContent||'').trim());
+    });
+  }
+  function applyCounters(rootNode,total){
+    for(const el of findZeroCounters(rootNode)){
+      const before=(el.textContent||'').trim();
+      el.dataset.siriOriginalZero=before;
+      el.textContent=before.replace(/^0\b|^0(?=\s)/,String(total));
+      lastAutoCount.push(el);
+    }
+  }
+  function restoreCounters(){
+    for(const el of lastAutoCount){
+      if(el?.isConnected && el.dataset.siriOriginalZero){
+        if(/^\d+\s*(?:จุด|ข้อ|รายการ|errors?|ข้อผิดพลาด)$/i.test((el.textContent||'').trim()))
+          el.textContent=el.dataset.siriOriginalZero;
+        delete el.dataset.siriOriginalZero;
+      }
+    }
+    lastAutoCount=[];
+  }
+  function hideEmptyPlaceholders(rootNode){
+    rootNode.querySelectorAll('p,div,span,article,section').forEach(el=>{
+      if(el.id===MOUNT_ID || el.closest('#'+MOUNT_ID)) return;
+      if(el.children.length > 2 || el.textContent.length>160) return;
+      const t=(el.textContent||'').replace(/\s+/g,' ').trim();
+      if(/^(?:✅|✔|✓|☑|\s)*\s*(?:ยังไม่พบข้อผิดพลาด|ไม่พบข้อผิดพลาด|ไม่พบปัญหา|ไม่พบจุดผิดพลาด|no issues found)/i.test(t)){
+        if(!el.hasAttribute('data-siri-was-hidden')){
+          el.dataset.siriWasHidden=el.hidden?'1':'0';
+          el.hidden=true;
+        }
+      }
+    });
+  }
+  function restoreEmptyPlaceholders(){
+    document.querySelectorAll('[data-siri-was-hidden]').forEach(el=>{
+      el.hidden=el.dataset.siriWasHidden==='1';
+      delete el.dataset.siriWasHidden;
+    });
+  }
+  function drawIssues(issues,editor){
+    const existing=document.getElementById(MOUNT_ID);
+    if(existing)existing.remove();
+    restoreEmptyPlaceholders();
+    restoreCounters();
+    lastHadIssues=false;
+    if(!issues.length) return;
+    const rootNode=resultRoot();
+    if(!rootNode) return;
+    lastResultRoot=rootNode;
+    const oldResultText=(rootNode.textContent||'').replace(/\s+/g,' ');
+    const unique=issues.filter(item=>!oldResultText.includes(item.title));
+    if(!unique.length) return;
+    styleOnce();
+    const mount=mountInto(rootNode);
+    appendText(mount,'div','siri-heading',`Arduino: พบข้อผิดพลาดเพิ่มเติม ${unique.length} จุด`);
+    unique.forEach(item=>{
+      const card=appendText(mount,'article','siri-issue','');
+      const top=appendText(card,'div','siri-top','');
+      appendText(top,'span','siri-title',item.title);
+      const btn=appendText(top,'button','siri-line',`บรรทัด ${item.line}`);
+      btn.type='button';btn.setAttribute('data-siri-addon-action','jump');
+      btn.addEventListener('click',e=>{
+        e.preventDefault();e.stopPropagation();editor.jump(editor,item.line,item.column);
+      });
+      appendText(card,'p','',`สาเหตุ: ${item.cause}`);
+      appendText(card,'p','',`วิธีแก้: ${item.fix}`);
+    });
+    hideEmptyPlaceholders(rootNode);
+    applyCounters(rootNode,unique.length);
+    lastHadIssues=true;
+  }
+  function refresh(){
+    if(typeof document==='undefined')return [];
+    const editor=readTextEditor();lastEditor=editor;
+    const source=editor.value||'';
+    const issues=(source.trim() && isArduino(source)) ? analyze(source) : [];
+    drawIssues(issues,editor);
+    document.documentElement.dataset.codeDoctorArduinoAddon='3.0';
+    return issues;
+  }
+  function scheduleRefresh(){
+    scanTickets.forEach(n=>root.clearTimeout(n));scanTickets=[];
+    for (const delay of [30,160,420]) scanTickets.push(root.setTimeout(refresh,delay));
+  }
+  function isAnalyzeClick(e){
+    const node=e.target?.closest?.('button,[role="button"],input[type="submit"],input[type="button"]');
+    if(!node || node.hasAttribute('data-siri-addon-action')) return false;
+    const phrase=[node.id,node.className,node.name,node.title,node.textContent,node.value,node.getAttribute('aria-label')].join(' ');
+    return /(?:ตรวจ|วิเคราะห์|analysis|analy[sz]e|check|debug|scan)/i.test(phrase) &&
+      !/(?:clear|reset|ล้าง|คัดลอก|copy|example|ตัวอย่าง)/i.test(phrase);
+  }
+  function installUI(){
+    if(typeof document==='undefined' || root.__CODE_DOCTOR_ADDON_NO_UI__) return;
+    if(root.__CODE_DOCTOR_ARDUINO_V3_INSTALLED__) return;
+    root.__CODE_DOCTOR_ARDUINO_V3_INSTALLED__=true;
+    document.documentElement.dataset.codeDoctorArduinoAddon='3.0';
+    document.addEventListener('click',e=>{if(isAnalyzeClick(e))scheduleRefresh();},true);
+    document.addEventListener('submit',scheduleRefresh,true);
+    document.addEventListener('input',e=>{
+      // Only re-run live when the user previously viewed findings; never
+      // interfere with the original site's own editor input handling.
+      if(lastHadIssues && (e.target.matches?.('textarea,[contenteditable]')))scheduleRefresh();
+    },true);
+    root.CodeDoctorSiRiArduinoRefresh=refresh;
+    // Read existing source code once if the original site pre-populated it.
+    root.setTimeout(refresh,250);
+  }
+
+  root.CodeDoctorSiRiArduinoAddon={VERSION,maskNonCode,findFunctionDefinitions,analyze,refresh};
+  if(typeof document!=='undefined'){
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',installUI,{once:true});
     else installUI();
   }
 })(typeof window !== 'undefined' ? window : globalThis);
