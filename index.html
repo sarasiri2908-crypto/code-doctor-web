@@ -831,5 +831,286 @@ document.getElementById('mobileTop')?.addEventListener('click',()=>{
 });
 updateNums();
 </script>
+
+<!-- Code DoctorSiRi Arduino add-on: original design preserved -->
+<script>
+/* Code DoctorSiRi Arduino Diagnostics Add-on v2.1
+ * Drop-in detection layer; does not alter existing HTML, CSS or original functions.
+ * Offline, no external libraries or network use.
+ */
+(function (root) {
+  'use strict';
+
+  const VERSION = '2.1.0';
+  const textAt = (s, ln) => String(s).replace(/\r\n?/g, '\n').split('\n')[Math.max(0, ln - 1)] || '';
+  function locationAt(source, index) {
+    let line = 1, lastBreak = -1;
+    for (let i = 0; i < index; i++) {
+      if (source[i] === '\n') { line++; lastBreak = i; }
+    }
+    return {line, column: index - lastBreak};
+  }
+
+  // Preserve every character offset and line break. Mask strings, character literals,
+  // raw C++ strings, // comments, and /* */ comments before searching for functions.
+  function maskNonCode(source) {
+    const s = String(source).replace(/\r\n?/g, '\n');
+    const out = [];
+    let state = 'normal', quote = '', rawTerminator = '';
+    for (let i = 0; i < s.length;) {
+      const c = s[i], n = s[i + 1] || '';
+      if (state === 'normal') {
+        if (c === '/' && n === '/') {out.push(' ', ' '); i += 2; state = 'line'; continue;}
+        if (c === '/' && n === '*') {out.push(' ', ' '); i += 2; state = 'block'; continue;}
+        if (c === 'R' && n === '"') {
+          let j = i + 2;
+          while (j < s.length && j < i + 21 && !/[\n(\\)\s]/.test(s[j])) j++;
+          if (s[j] === '(') {
+            rawTerminator = ')' + s.slice(i + 2, j) + '"';
+            for (let k = i; k <= j; k++) out.push(' ');
+            i = j + 1; state = 'raw'; continue;
+          }
+        }
+        if (c === '"' || c === "'" || c === '`') {quote = c; out.push(' '); i++; state = 'quoted'; continue;}
+        out.push(c); i++; continue;
+      }
+      if (state === 'line') {
+        if (c === '\n') {out.push('\n'); state = 'normal';} else out.push(' ');
+        i++; continue;
+      }
+      if (state === 'block') {
+        if (c === '*' && n === '/') {out.push(' ', ' '); i += 2; state = 'normal';}
+        else {out.push(c === '\n' ? '\n' : ' '); i++;}
+        continue;
+      }
+      if (state === 'raw') {
+        if (s.startsWith(rawTerminator, i)) {
+          for (let k = 0; k < rawTerminator.length; k++) out.push(' ');
+          i += rawTerminator.length; state = 'normal';
+        } else {out.push(c === '\n' ? '\n' : ' '); i++;}
+        continue;
+      }
+      if (state === 'quoted') {
+        if (c === '\\' && i + 1 < s.length) {
+          out.push(' ', n === '\n' ? '\n' : ' '); i += 2;
+        } else {
+          out.push(c === '\n' ? '\n' : ' ');
+          i++;
+          if (c === quote) state = 'normal';
+        }
+      }
+    }
+    return out.join('');
+  }
+
+  function closingBracket(masked, open, left, right) {
+    let depth = 0;
+    for (let i = open; i < masked.length; i++) {
+      if (masked[i] === left) depth++;
+      else if (masked[i] === right && --depth === 0) return i;
+    }
+    return -1;
+  }
+
+  const invalidFirstWord = new Set([
+    'if', 'else', 'for', 'while', 'switch', 'catch', 'return', 'delete',
+    'new', 'throw', 'case', 'do', 'sizeof', 'decltype', 'co_return',
+    'typedef', 'using', 'class', 'struct', 'namespace', 'union',
+    'const', 'volatile', 'static_assert', 'template', 'concept',
+    'void', // void as function name would be invalid
+  ]);
+  const invalidFunctionNames = new Set([
+    'if', 'else', 'for', 'while', 'switch', 'catch', 'return', 'sizeof',
+    'decltype', 'do', 'new', 'delete', 'static_assert',
+  ]);
+
+  function findFunctionDefinitions(source) {
+    const s = String(source).replace(/\r\n?/g, '\n');
+    const masked = maskNonCode(s);
+    const found = [];
+    // C/C++ return type + function identifier. This is intentionally a
+    // lightweight parser rather than a replacement for GCC/Clang.
+    const pattern = /\b([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)(?:\s*[*&]\s*|\s+)([A-Za-z_]\w*)\s*\(/g;
+    let m;
+    while ((m = pattern.exec(masked))) {
+      const returnType = m[1], name = m[2];
+      if (invalidFirstWord.has(returnType) && returnType !== 'void') continue;
+      if (invalidFunctionNames.has(name)) continue;
+      const parenOpen = pattern.lastIndex - 1;
+      const parenClose = closingBracket(masked, parenOpen, '(', ')');
+      if (parenClose < 0) continue;
+      // A declaration followed by ; is not a definition.
+      let k = parenClose + 1;
+      while (/\s/.test(masked[k] || '') && k < masked.length) k++;
+      if (masked.slice(k).match(/^(?:const|noexcept|override|final)\b/)) {
+        const tail = /^(?:(?:const|noexcept|override|final)\s*)+/.exec(masked.slice(k));
+        if (tail) k += tail[0].length;
+      }
+      if (masked[k] !== '{') continue;
+      const lc = locationAt(s, m.index);
+      const close = closingBracket(masked, k, '{', '}');
+      found.push({returnType, name, index:m.index, open:k, close,
+        line:lc.line, column:lc.column, signature:textAt(s, lc.line).trim()});
+      pattern.lastIndex = parenOpen + 1;
+    }
+    return found;
+  }
+
+  function analyze(source) {
+    const s = String(source || '').replace(/\r\n?/g, '\n');
+    const defs = findFunctionDefinitions(s);
+    const issues = [];
+    for (const name of ['setup', 'loop']) {
+      const arr = defs.filter(d => d.name === name && d.returnType === 'void');
+      for (let i = 1; i < arr.length; i++) {
+        const d = arr[i], first = arr[0];
+        issues.push({
+          code:'duplicate-' + name, type:'duplicate', level:'error', name,
+          line:d.line, column:d.column, firstLine:first.line,
+          title:`พบ void ${name}() ซ้ำ`,
+          cause:`พบ void ${name}() จำนวน ${arr.length} ครั้ง โดยครั้งแรกอยู่บรรทัด ${first.line} และพบซ้ำที่บรรทัด ${d.line} ทำให้เกิดข้อผิดพลาดการนิยามฟังก์ชันซ้ำ (redefinition)`,
+          fix:`ให้มี void ${name}() เพียง 1 ฟังก์ชัน และนำคำสั่งของฟังก์ชันที่ซ้ำไปรวมในฟังก์ชันเดิม โดยตรวจลำดับการทำงาน`,
+          before:textAt(s,d.line),
+          after:`void ${name}() {\n  // รวมคำสั่งของ ${name}() ทั้งหมดไว้ที่นี่\n}`
+        });
+      }
+    }
+    // A nested *function definition* is illegal in standard Arduino C++.
+    // Do not confuse valid nested if/for blocks with nested functions.
+    for (const d of defs) {
+      const enclosing = defs
+        .filter(parent => parent !== d && parent.open < d.index &&
+          (parent.close === -1 || parent.close > d.index))
+        .sort((a,b) => b.open - a.open)[0];
+      if (!enclosing) continue;
+      issues.push({
+        code:'nested-' + d.name, type:'nested', level:'error', name:d.name,
+        line:d.line, column:d.column, firstLine:enclosing.line,
+        title:`ฟังก์ชัน ${d.name}() เขียนซ้อนภายใน ${enclosing.name}()`,
+        cause:`พบการนิยามฟังก์ชัน ${d.name}() ที่บรรทัด ${d.line} ภายในฟังก์ชัน ${enclosing.name}() ซึ่งเริ่มที่บรรทัด ${enclosing.line} ภาษา C++ ของ Arduino ไม่อนุญาตให้เขียนฟังก์ชันภายในอีกฟังก์ชัน`,
+        fix:`ย้ายนิยาม ${d.name}() ออกมานอก ${enclosing.name}() ในระดับเดียวกับฟังก์ชันอื่น แล้วเรียกใช้งานจากภายในตามต้องการ`,
+        before:textAt(s,d.line),
+        after:`// ย้ายมาระดับบนสุดของไฟล์\n${d.returnType} ${d.name}() {\n  // คำสั่งภายในฟังก์ชัน\n}`
+      });
+    }
+    return issues.sort((a,b) => a.line-b.line || (a.type==='duplicate'?-1:1));
+  }
+
+  function installUI() {
+    if (typeof document === 'undefined' || root.__CODE_DOCTOR_ADDON_NO_UI__) return;
+    const blockId = 'codesiri-arduino-addon-results-v2';
+    function pickSource() {
+      for (const selector of [
+        '#source','#code','#sourceCode','#codeInput','#codeEditor','#editor',
+        'textarea[name="source"]','textarea[name="code"]',
+        'textarea[id*="code" i]', 'textarea:not([id*="log" i])'
+      ]) {
+        const e = document.querySelector(selector);
+        if (e && ((e.tagName === 'TEXTAREA') || (e.tagName === 'INPUT' && e.type === 'text'))) return e;
+      }
+      return null;
+    }
+    function relevant(code) {
+      const selects = [
+        '#lang','#language','#codeLanguage','#languageSelect','#ide','#compilerType'
+      ].map(s => document.querySelector(s)).filter(Boolean);
+      const values = selects.map(e => String(e.value||'') + ' ' + String(e.options?.[e.selectedIndex]?.text || ''));
+      if (values.some(v => /arduino/i.test(v))) return true;
+      const explicitLanguage = values.some(v => /\b(?:python|javascript|html|css|php)\b/i.test(v));
+      if (explicitLanguage) return false;
+      return /\bvoid\s+(?:setup|loop)\s*\(/.test(maskNonCode(code));
+    }
+    function outputTarget() {
+      for (const selector of [
+        '#results', '#result', '#analysisResults', '#analysisResult',
+        '#resultPanel', '#output', '.results', '.result-panel',
+        '.results-container', '#tab-issues', '#panel-issues'
+      ]) {
+        const e = document.querySelector(selector);
+        if (e) return selector === '#tab-issues' ? e.parentElement : e;
+      }
+      const e = pickSource();
+      return e?.closest('section,article,.card,.panel')?.parentElement || e?.parentElement;
+    }
+    function addText(parent, tag, className, value) {
+      const e = document.createElement(tag);
+      if (className) e.className = className;
+      e.textContent = value;
+      parent.appendChild(e);
+      return e;
+    }
+    function goToLine(editor, line, column) {
+      const str=editor.value.replace(/\r\n?/g, '\n'), rows = str.split('\n');
+      const offset = rows.slice(0, line-1).reduce((n, row) => n+row.length+1, 0);
+      const from=Math.min(offset + Math.max(0,column-1),editor.value.length);
+      const to=Math.min(offset+(rows[line-1]?.length||0),editor.value.length);
+      editor.focus(); editor.setSelectionRange(from,to);
+      const computed=root.getComputedStyle?.(editor);
+      const lh=parseFloat(computed?.lineHeight)||22;
+      editor.scrollTop=Math.max(0,(line-1)*lh-editor.clientHeight/3);
+      editor.scrollIntoView({behavior:'smooth',block:'nearest'});
+    }
+    function render() {
+      const current=document.getElementById(blockId), editor=pickSource();
+      if (current) current.remove();
+      if (!editor || !editor.value.trim() || !relevant(editor.value)) return;
+      const issues=analyze(editor.value);
+      if (!issues.length) return;
+      // When an existing analyzer exposes the same diagnostics, only show
+      // genuinely new findings; this avoids reporting the same fault twice.
+      const prior=root.CodeDoctorSiRiAnalyzer;
+      let visible=issues;
+      if (prior && typeof prior.analyze === 'function') {
+        try {
+          const old=prior.analyze(editor.value, '', 'arduino', 'arduino');
+          visible=issues.filter(item => !old.some(d =>
+            d.line === item.line &&
+            ((item.type==='duplicate' && /^duplicate-/.test(d.key||'')) ||
+             (item.type==='nested' && /^nested-/.test(d.key||'')))));
+        } catch (_) { /* original analyzer may have another signature */ }
+      }
+      if (!visible.length) return;
+      const target=outputTarget(); if (!target) return;
+      const section=document.createElement('section'); section.id=blockId;
+      section.setAttribute('aria-label','ผลตรวจ Arduino เพิ่มเติม');
+      section.style.cssText='box-sizing:border-box;margin:16px 0;padding:16px;border:1px solid #d4e4d9;border-radius:12px;background:#fff;color:#18352f;box-shadow:0 2px 12px #15372612;max-width:100%;overflow:hidden';
+      addText(section,'h3','',`ตรวจ Arduino เพิ่มเติม: พบ ${visible.length} ข้อผิดพลาด`).style.cssText='font:700 17px/1.5 system-ui,Tahoma,sans-serif;margin:0 0 12px';
+      for(const i of visible) {
+        const card=document.createElement('div');card.style.cssText='background:#fff9f9;border:1px solid #ecd8da;border-left:4px solid #d44650;border-radius:9px;padding:12px;margin:10px 0;font:14px/1.6 system-ui,Tahoma,sans-serif';
+        addText(card,'strong','',i.title);
+        const btn=document.createElement('button');btn.type='button';btn.textContent=`บรรทัด ${i.line}`;
+        btn.style.cssText='display:inline-block;margin-left:8px;padding:5px 9px;border:1px solid #b6d8c8;border-radius:7px;background:#ecf8f1;color:#125441;font-weight:700;cursor:pointer';
+        btn.addEventListener('click',()=>goToLine(editor,i.line,i.column));card.appendChild(btn);
+        addText(card,'p','',`สาเหตุ: ${i.cause}`).style.cssText='margin:8px 0';
+        addText(card,'p','',`วิธีแก้: ${i.fix}`).style.cssText='margin:8px 0';
+        const pre=document.createElement('pre');pre.textContent=i.before;
+        pre.style.cssText='margin:8px 0 0;background:#142423;color:#e6f9ef;padding:9px 11px;border-radius:7px;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.5 Consolas,monospace';card.appendChild(pre);
+        section.appendChild(card);
+      }
+      target.appendChild(section);
+    }
+    function isAnalyzeAction(node) {
+      const button=node.closest?.('button,input[type="button"],input[type="submit"],[role="button"]');
+      if (!button) return false;
+      const text=(button.textContent||button.value||'').trim(), id=button.id||'';
+      if (/load|example|clear|reset|copy|top|tab|example/i.test(id)) return false;
+      return /(?:analy[sz]e|check|ตรวจ|วิเคราะห์)/i.test(text+' '+id);
+    }
+    document.addEventListener('click',e=>{
+      if(!isAnalyzeAction(e.target)) return;
+      root.setTimeout(render,75);
+    },true);
+    document.addEventListener('submit',()=>root.setTimeout(render,75),true);
+    root.CodeDoctorSiRiArduinoRefresh=render;
+  }
+
+  root.CodeDoctorSiRiArduinoAddon={VERSION, maskNonCode, findFunctionDefinitions, analyze};
+  if (typeof document !== 'undefined') {
+    if (document.readyState==='loading') document.addEventListener('DOMContentLoaded',installUI,{once:true});
+    else installUI();
+  }
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
 </body>
 </html>
