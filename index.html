@@ -264,7 +264,7 @@ h1{font-size:24px;line-height:1.2}
 <body>
 <div class="app">
 <header>
-  <div><h1>🧩 Code DoctorSiRi — IDE Error Helper</h1>
+  <div><h1>🧩 Code DoctorSiRi — IDE Error Helper <small style="font-size:.55em;color:#9bb7de">V4</small></h1>
   <div class="sub">วางโค้ด + Compiler Log แล้วแปล Error เป็นภาษาไทย พร้อมชี้บรรทัดและแนะนำวิธีแก้</div></div>
   <div class="badge">Dev-C++ • Code::Blocks • VS Code • Visual Studio • Arduino • Python • Browser</div>
 </header>
@@ -301,7 +301,10 @@ h1{font-size:24px;line-height:1.2}
     <option value="visualstudio">Visual Studio: identifier not found</option>
     <option value="arduino">Arduino IDE: ฟังก์ชันพิมพ์ผิด</option>
     <option value="python">Python / IDLE: NameError</option>
-    <option value="python_pa">Python: ใบงาน PA (ขาด : และเกณฑ์ซ้ำ)</option>
+    <option value="python_pa">Python: ตัวอย่าง PA (ขาด : และเกณฑ์ซ้ำ)</option>
+    <option value="python_pa_b">Python: ตัวอย่าง PA (4 จุด)</option>
+    <option value="python_multi">Python: Syntax ผิดหลายจุด</option>
+    <option value="python_runtime">Python: ความเสี่ยงขณะรัน</option>
     <option value="javascript">Browser Console: ReferenceError</option>
     <option value="html">HTML: ปิดแท็กไม่ตรง</option>
     <option value="css">CSS: ลืม ; และ }</option>
@@ -368,8 +371,8 @@ code.addEventListener('scroll',()=>nums.scrollTop=code.scrollTop);
 code.addEventListener('keydown',e=>{
   if(e.key==='Tab'){
     e.preventDefault(); const s=code.selectionStart,en=code.selectionEnd;
-    code.value=code.value.slice(0,s)+'  '+code.value.slice(en);
-    code.selectionStart=code.selectionEnd=s+2; updateNums();
+    const spaces=lang.value==='python'?'    ':'  ';code.value=code.value.slice(0,s)+spaces+code.value.slice(en);
+    code.selectionStart=code.selectionEnd=s+spaces.length; code.dispatchEvent(new Event('input'));
   }
 });
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
@@ -986,6 +989,34 @@ else:
     log:'',
     note:'ตัวอย่างจากโค้ดที่เห็นในภาพ: บรรทัด 15 ขาด : และบรรทัด 18 มีเกณฑ์ซ้ำซึ่งต้องเทียบโจทย์'
   },
+  python_pa_b:{lang:'python',compiler:'python',code:`try:
+    subject = int(input("Subject (1/2): "))
+    work = int(input("Work (0-30): "))
+    mid = int(input("Midterm (0-30): "))
+    final = int(input("Final (0-40): "))
+    attendance = int(input("Attendance (%): "))
+except ValueError:
+    print("INVALID")
+else:
+    if (subject not in (1, 2) and
+        not 0 <= work <= 30 or not 0 <= mid <= 30 or
+        not 0 <= final <= 40 or not 0 <= attendance <= 100):
+        print("INVALID")
+     else:
+        if subject == 1:
+            minimum = 85
+        else:
+            minimum = 85
+
+        total = work + mid + final - 1
+        print("Total =", total)`,log:'',note:'โค้ดจำลองจากจุดผิดที่สนทนากัน ไม่ใช่ใบงานชุด B ฉบับเต็ม: and, indentation, เกณฑ์ซ้ำ และคะแนนรวม -1'},
+  python_multi:{lang:'python',compiler:'python',code:`if True
+    print(1)
+if False
+    print(2)`,log:'',note:'ทดสอบการพบ colon ขาดสองจุดโดยไม่ต้องแก้ทีละจุดก่อนตรวจ'},
+  python_runtime:{lang:'python',compiler:'python',code:`print(unknown)
+x = 4 / 0
+print([1][2])`,log:'',note:'ตัวอย่างความเสี่ยงขณะรันที่ตรวจได้จาก AST โดยไม่รันโปรแกรม'},
   javascript:{
     lang:'js', compiler:'browser',
     code:`const username = "student";
@@ -1059,6 +1090,7 @@ updateNums();
 
 
 <!-- Code DoctorSiRi Arduino add-on: original design preserved -->
+<script>window.__CODE_DOCTOR_ADDON_NO_UI__=true;</script>
 <script>
 /* Code DoctorSiRi Arduino Diagnostics Add-on v3.0
  * Drop-in detection layer; does not alter existing HTML, CSS or original functions.
@@ -1507,6 +1539,13 @@ updateNums();
   }
 })(typeof window !== 'undefined' ? window : globalThis);
 
+</script>
+<script src="acorn.js"></script>
+<script src="doctor-v4.js"></script>
+<script>
+if ('serviceWorker' in navigator && /^(https:|http:)$/.test(location.protocol)) {
+ navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
+}
 </script>
 </body>
 </html>
