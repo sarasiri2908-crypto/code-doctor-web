@@ -301,6 +301,7 @@ h1{font-size:24px;line-height:1.2}
     <option value="visualstudio">Visual Studio: identifier not found</option>
     <option value="arduino">Arduino IDE: ฟังก์ชันพิมพ์ผิด</option>
     <option value="python">Python / IDLE: NameError</option>
+    <option value="python_pa">Python: ใบงาน PA (ขาด : และเกณฑ์ซ้ำ)</option>
     <option value="javascript">Browser Console: ReferenceError</option>
     <option value="html">HTML: ปิดแท็กไม่ตรง</option>
     <option value="css">CSS: ลืม ; และ }</option>
@@ -380,7 +381,7 @@ document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
 function esc(s){return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;")}
 function add(a,type,title,line,col,raw,easy,fix,codefix=''){a.push({type,title,line,col,raw,easy,fix,codefix})}
 function goLine(n){
-  const ls=code.value.split('\n'); let p=0;
+  const ls=code.value.split('\n'); n=Math.min(Math.max(1,n),ls.length); let p=0;
   for(let i=0;i<n-1;i++)p+=ls[i].length+1;
   code.focus(); code.setSelectionRange(p,p+(ls[n-1]?.length||0));
   code.scrollTop=Math.max(0,(n-3)*22);
@@ -394,6 +395,7 @@ function sourceLine(n){
 function autoFixedLine(item){
   const original=sourceLine(item.line);
   if(item.codefix) return item.codefix;
+  if(lang.value==='python')return '';
 
   let fixed=original;
   if(/Printf/.test(fixed)) fixed=fixed.replace(/\bPrintf\b/g,'printf');
@@ -416,7 +418,14 @@ function autoFixedLine(item){
 
 function parseCompilerLog(text,out){
   const lines=text.split('\n').filter(Boolean);
+  let pyLine=1;
   lines.forEach(line=>{
+    if(lang.value==='python'){
+      const frame=line.match(/File\s+".*?",\s+line\s+(\d+)/i);
+      if(frame){pyLine=+frame[1];return;}
+      const py=line.trim().match(/^(SyntaxError|NameError|TypeError|IndentationError|TabError|ValueError|IndexError|KeyError|ZeroDivisionError|AttributeError|ModuleNotFoundError|ImportError|RuntimeError|OverflowError|FileNotFoundError):\s*(.*)$/);
+      if(py){pythonCompilerIssue({ok:false,type:py[1],message:py[2],line:pyLine,col:0},code.value,out);return;}
+    }
     let m;
 
     // GCC/Clang: file:line:col: error: message
@@ -550,8 +559,126 @@ function pythonFix(type,msg){
   }; return map[type]||'ตรวจข้อความ Error และบรรทัดที่แจ้ง';
 }
 
+
+// Python source diagnostics: local fallback + optional real CPython compiler.
+const PYODIDE_URL='https://cdn.jsdelivr.net/pyodide/v0.27.7/full/';
+let pythonEnginePromise=null;
+let analysisRevision=0;
+function pythonFallback(text,out){
+  const lines=text.replace(/\r\n?/g,'\n').split('\n');
+  const stack=[]; const records=[];
+  let quote='', quoteAt=null, escaped=false, logical=null;
+  const pairs={')':'(',']':'[','}':'{'};
+  const header=/^\s*(?:(?:async\s+)?(?:def|for|with)|if|elif|else|while|try|except\*?|finally|class|match|case)\b/;
+  function err(title,line,col,raw,easy,fix,codefix=''){
+    add(out,'error',title,line,col,raw,easy,fix,codefix);
+  }
+  for(let i=0;i<lines.length;i++){
+    const raw=lines[i]; let masked='', comment=raw.length, topColon=false;
+    const starting=stack.length===0 && !quote && !logical;
+    for(let j=0;j<raw.length;j++){
+      const c=raw[j];
+      if(quote){
+        if(escaped){escaped=false;masked+=' ';continue;}
+        if(c==='\\'){escaped=true;masked+=' ';continue;}
+        if(raw.startsWith(quote,j)){masked+=' '.repeat(quote.length);j+=quote.length-1;quote='';quoteAt=null;continue;}
+        masked+=' ';continue;
+      }
+      if(c==='#'){comment=j;break;}
+      if(c==='"'||c==="'"){
+        quote=raw.startsWith(c.repeat(3),j)?c.repeat(3):c;
+        quoteAt={line:i+1,col:j+1};masked+='S'+' '.repeat(quote.length-1);j+=quote.length-1;continue;
+      }
+      if('([{'.includes(c))stack.push({c,line:i+1,col:j+1});
+      else if(')]}'.includes(c)){
+        if(stack.length && stack.at(-1).c===pairs[c])stack.pop();
+        else {err('SyntaxError: วงเล็บปิดไม่ตรงคู่',i+1,j+1,raw,'วงเล็บปิดไม่มีวงเล็บเปิดที่ตรงกัน','ตรวจคู่ของ (), [] และ {}');stack.length=0;}
+      }else if(c===':' && !stack.length && raw[j+1]!=='=')topColon=true;
+      masked+=c;
+    }
+    const significant=masked.trim();
+    if(starting && significant){
+      const h=header.test(masked) && !/^\s*(?:match|case)\s*(?:=|:|\+=|-=)/.test(masked);
+      // match/case are soft keywords; skip ambiguous uses in fallback.
+      logical={header:h&&!/^\s*(?:match|case)\b/.test(masked),colon:false,start:i+1};
+    }
+    if(logical)logical.colon ||= topColon;
+    const continued=significant.endsWith('\\') || (quote.length===1 && escaped);
+    if(quote.length===1 && !continued){
+      err('SyntaxError: เครื่องหมายคำพูดไม่ครบ',quoteAt.line,quoteAt.col,lines[quoteAt.line-1],'ข้อความ String เปิดไว้แต่ไม่ปิด','เติมเครื่องหมายคำพูดให้ตรงคู่');quote='';quoteAt=null;
+    }
+    escaped=false;
+    if(logical && !stack.length && !quote && !continued){
+      if(logical.header&&!logical.colon){
+        const body=raw.slice(0,comment).trimEnd();
+        const suffix=raw.slice(body.length);
+        err('SyntaxError: ขาดเครื่องหมาย :',i+1,body.length+1,"SyntaxError: expected ':'",'คำสั่งควบคุมหรือประกาศฟังก์ชันต้องมี colon ก่อนเริ่มบล็อก','เติม : ท้ายเงื่อนไขหรือหัวคำสั่ง ก่อน comment',body+':'+suffix);
+      }
+      logical=null;
+    }
+    // Keep code records for conservative, literal-only duplicated-branch checks.
+    if(starting && significant){records.push({line:i+1,indent:raw.match(/^\s*/)[0].replace(/\t/g,'        ').length,text:raw.slice(0,comment).trim()});}
+  }
+  if(quote&&quoteAt)err('SyntaxError: ข้อความหลายบรรทัดไม่ปิด',quoteAt.line,quoteAt.col,lines[quoteAt.line-1],'Triple-quoted string ยังไม่ปิด','เติมเครื่องหมายคำพูดสามตัวให้ครบคู่');
+  for(const b of stack)err('SyntaxError: วงเล็บเปิดยังไม่ปิด',b.line,b.col,lines[b.line-1],'วงเล็บเปิดยังไม่มีวงเล็บปิดที่ตรงคู่','ตรวจคู่ของ (), [] และ {}');
+  // Detect only if/else each containing exactly one identical literal assignment.
+  const literal=/^([A-Za-z_]\w*)\s*=\s*(-?\d+(?:\.\d+)?|True|False|None)\s*$/;
+  for(let i=0;i+3<records.length;i++){
+    const [a,b,c,d]=records.slice(i,i+4), next=records[i+4];
+    const x=b.text.match(literal),y=d.text.match(literal);
+    if(/^if\s+/.test(a.text)&&c.text==='else:'&&a.indent===c.indent&&b.indent===d.indent&&b.indent>a.indent&&(!next||next.indent<=a.indent)&&x&&y&&x[1]===y[1]&&x[2]===y[2]){
+      add(out,'warn','ตรวจสอบตรรกะ: if และ else กำหนดค่าเท่ากัน',d.line,1,d.text,`ทั้งสองเงื่อนไขกำหนด ${x[1]} = ${x[2]} เหมือนกัน อาจถูกต้องตามโจทย์ก็ได้`,'เปรียบเทียบเกณฑ์ของแต่ละเงื่อนไขกับโจทย์ก่อนแก้ ไม่ควรเดาค่าที่ถูกต้อง');
+    }
+  }
+}
+function getPythonEngine(){
+  if(pythonEnginePromise)return pythonEnginePromise;
+  pythonEnginePromise=(async()=>{
+    if(typeof window.loadPyodide!=='function'){
+      await new Promise((resolve,reject)=>{
+        const script=document.createElement('script');script.src=PYODIDE_URL+'pyodide.js';
+        script.onload=resolve;script.onerror=()=>{script.remove();reject(new Error('CDN unavailable'));};
+        document.head.appendChild(script);
+      });
+    }
+    return window.loadPyodide({indexURL:PYODIDE_URL});
+  })().catch(e=>{pythonEnginePromise=null;throw e;});
+  return pythonEnginePromise;
+}
+// Fixed trusted Python code. The student's code is passed as data; never executed.
+const PYTHON_CHECK=`import json
+try:
+    compile(_doctor_source, '<source>', 'exec', dont_inherit=True)
+    _doctor_result = {'ok': True}
+except (SyntaxError, ValueError, OverflowError) as e:
+    _doctor_result = {'ok': False, 'type': type(e).__name__, 'message': getattr(e, 'msg', str(e)), 'line': getattr(e, 'lineno', None) or 1, 'col': getattr(e, 'offset', None) or 0}
+json.dumps(_doctor_result)`;
+function pythonCompilerIssue(result,text,out){
+  if(result.ok)return;
+  const {type,message,line,col}=result;
+  let title=type,easy=pythonExplain(type,message),fix=pythonFix(type,message),codefix='';
+  if(type==='TabError'){easy='ใช้ Tab และ Space ในการเยื้องบรรทัดไม่สอดคล้องกัน';fix='ใช้ Space 4 ตัวต่อระดับอย่างสม่ำเสมอ';}
+  if(/expected ':'/.test(message)){
+    title='SyntaxError: ขาดเครื่องหมาย :';easy='Python คาดว่าจะพบ colon ก่อนเริ่มบล็อกคำสั่ง';fix='เติม : ที่ท้ายหัวคำสั่ง ก่อน comment';
+    const local=[];pythonFallback(text,local);codefix=local.find(x=>x.line===line&&x.title===title)?.codefix||'';
+  }else if(/never closed|does not match|unmatched/.test(message)){title=type+': วงเล็บไม่ครบหรือไม่ตรงคู่';fix='ตรวจวงเล็บ (), [] และ {} ให้ครบและตรงคู่';}
+  else if(/unterminated|EOL while scanning/.test(message)){title=type+': เครื่องหมายคำพูดไม่ครบ';fix='ตรวจเครื่องหมายคำพูดเปิดและปิดของ String';}
+  add(out,'error',title,line,Math.max(0,col),type+': '+message,easy,fix,codefix);
+}
+async function fullPythonCheck(text){
+  let timer;
+  try{
+    const engine=await Promise.race([getPythonEngine(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Python engine timeout')),10000);})]);
+    engine.globals.set('_doctor_source',text);
+    try{return JSON.parse(engine.runPython(PYTHON_CHECK));}
+    finally{engine.globals.delete('_doctor_source');}
+  }finally{clearTimeout(timer);}
+}
+
 function staticChecks(text,l,out){
   const ls=text.split('\n');
+
+  if(l==='python')pythonFallback(text,out);
 
   if(l==='cpp'||l==='c'){
     ls.forEach((s,i)=>{
@@ -655,25 +782,52 @@ function render(items){
   document.getElementById('fixed').innerHTML=items.map(x=>`<div class="tip"><b>บรรทัด ${x.line}</b><span>${esc(x.fix)}</span>${x.codefix?`<div class="codefix">${esc(x.codefix)}</div>`:''}</div>`).join('');
 }
 
-document.getElementById('analyze').onclick=()=>{
-  const out=[];
-  if(log.value.trim())parseCompilerLog(log.value,out);
-  if(code.value.trim())staticChecks(code.value,lang.value,out);
+function showAnalysis(out,mode=''){
   render(out);
-
+  const errors=dedupe(out).filter(x=>x.type==='error').length;
+  status.textContent=errors?`พบ Error ${errors} จุด${mode?' • '+mode:''}`:(mode||'ตรวจเสร็จแล้ว');
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(x=>x.classList.remove('active'));
   document.querySelector('[data-tab="issues"]')?.classList.add('active');
   document.getElementById('issues')?.classList.add('active');
-
-  status.textContent=out.some(x=>x.type==='error')
-    ?`พบ Error/ข้อควรแก้ ${out.filter(x=>x.type==='error').length} จุด`
-    :'ตรวจเสร็จแล้ว';
-
-  if(window.innerWidth<=700){
-    setTimeout(()=>{
-      document.getElementById('issues')?.scrollIntoView({behavior:'smooth',block:'start'});
-    },80);
+}
+const compiler=document.getElementById('compiler');
+lang.addEventListener('change',()=>{
+  analysisRevision++;
+  if(lang.value==='python')compiler.value='python';
+  else if(compiler.value==='python')compiler.value='auto';
+  status.textContent='เปลี่ยนภาษาแล้ว • กดตรวจสอบอีกครั้ง';
+});
+for(const el of [code,log])el.addEventListener('input',()=>{analysisRevision++;status.textContent='มีการแก้ไข • กดตรวจสอบอีกครั้ง';});
+document.getElementById('analyze').onclick=async()=>{
+  const revision=++analysisRevision,source=code.value,language=lang.value;
+  const logs=[];if(log.value.trim())parseCompilerLog(log.value,logs);
+  const local=[];if(source.trim())staticChecks(source,language,local);
+  if(!source.trim()&&!log.value.trim()){
+    render([]);document.getElementById('issues').innerHTML='<div class="empty">กรุณาวาง Source Code หรือ Compiler Log ก่อนตรวจสอบ</div>';status.textContent='ยังไม่มีข้อมูล';return;
+  }
+  const isPython=language==='python'&&source.trim();
+  function mergePython(items){
+    // Same syntax error reported by the source and by a pasted log: one result.
+    const merged=[...items];for(const item of logs){if(!merged.some(x=>x.line===item.line&&x.title===item.title))merged.push(item);}return merged;
+  }
+  if(isPython){
+    showAnalysis(mergePython(local),'ตรวจพื้นฐานแล้ว • กำลังตรวจ Python จริง');
+    if(!local.length&&!logs.length)document.getElementById('issues').innerHTML='<div class="empty">ยังไม่พบจากตัวตรวจพื้นฐาน กำลังตรวจด้วย Python จริง</div>';
+  }else showAnalysis([...logs,...local]);
+  if(window.innerWidth<=700)setTimeout(()=>{document.getElementById('issues')?.scrollIntoView({behavior:'smooth',block:'start'});},80);
+  if(!isPython)return;
+  try{
+    const result=await fullPythonCheck(source);
+    if(revision!==analysisRevision||code.value!==source||lang.value!==language)return;
+    const checked=local.filter(x=>x.type==='warn');pythonCompilerIssue(result,source,checked);
+    showAnalysis(mergePython(checked),'ตรวจด้วย Python จริงแล้ว');
+    document.getElementById('easy').insertAdjacentHTML('afterbegin','<div class="tip"><b>Python compiler</b><span>ตรวจไวยากรณ์โดยไม่รันโค้ด อาจแสดง Syntax Error แรกเท่านั้น ให้แก้แล้วตรวจซ้ำ ส่วนตรรกะและผลลัพธ์ต้องเทียบกับโจทย์</span></div>');
+  }catch(e){
+    if(revision!==analysisRevision||code.value!==source||lang.value!==language)return;
+    showAnalysis(mergePython(local),'โหมดพื้นฐาน (Python จริงไม่พร้อม)');
+    if(!local.length&&!logs.length)document.getElementById('issues').innerHTML='<div class="empty">ยังไม่พบจากตัวตรวจพื้นฐาน แต่ยังตรวจไวยากรณ์ด้วย Python จริงไม่ได้ จึงไม่ยืนยันว่าโค้ดถูกต้องทั้งหมด</div>';
+    document.getElementById('easy').insertAdjacentHTML('afterbegin','<div class="tip"><b>โหมดพื้นฐาน</b><span>ใช้ได้แม้ไม่มีอินเทอร์เน็ต แต่ไม่ครอบคลุมทุก Syntax Error และไม่ตรวจผลลัพธ์โปรแกรม กรุณาเชื่อมต่ออินเทอร์เน็ตแล้วตรวจอีกครั้ง หรือใช้ Python ใน IDE</span></div>');
   }
 };
 
@@ -761,6 +915,32 @@ NameError: name 'namme' is not defined`,
     note:'Python / IDLE: namme สะกดไม่ตรงกับตัวแปร name'
   },
 
+  python_pa:{
+    lang:'python', compiler:'python',
+    code:`try:
+    subject = int(input("Subject (1/2): "))
+    work = int(input("Work (0-30): "))
+    mid = int(input("Midterm (0-30): "))
+    final = int(input("Final (0-40): "))
+    attendance = int(input("Attendance (%): "))
+except ValueError:
+    print("INVALID")
+else:
+    if (subject not in (1, 2) or
+        not 0 <= work <= 30 or not 0 <= mid <= 30 or
+        not 0 <= final <= 40 or not 0 <= attendance <= 100):
+        print("INVALID")
+    else:
+        if subject == 1
+            minimum = 80
+        else:
+            minimum = 80
+
+        total = work + mid + final
+        print("Total =", total)`,
+    log:'',
+    note:'ตัวอย่างจากโค้ดที่เห็นในภาพ: บรรทัด 15 ขาด : และบรรทัด 18 มีเกณฑ์ซ้ำซึ่งต้องเทียบโจทย์'
+  },
   javascript:{
     lang:'js', compiler:'browser',
     code:`const username = "student";
@@ -818,7 +998,7 @@ document.getElementById('loadSample').onclick=()=>{
 };
 
 document.getElementById('clear').onclick=()=>{
-  code.value='';log.value='';updateNums();count.textContent='0 จุด';status.textContent='พร้อมตรวจ';
+  analysisRevision++;code.value='';log.value='';updateNums();count.textContent='0 จุด';status.textContent='พร้อมตรวจ';
   document.getElementById('issues').innerHTML='<div class="empty">วางโค้ด หรือวาง Compiler Log แล้วกด “ตรวจสอบ”</div>';
   document.getElementById('easy').innerHTML='<div class="empty">ระบบจะแปล Error เป็นภาษาไทยเข้าใจง่าย</div>';
   document.getElementById('fixed').innerHTML='<div class="empty">ระบบจะแนะนำวิธีแก้ตาม Error ที่พบ</div>';
@@ -1107,6 +1287,7 @@ updateNums();
   function jumpGeneric(editor){editor.element?.scrollIntoView({block:'nearest',behavior:'smooth'});}
 
   function isArduino(code) {
+    if (!['cpp','c'].includes(document.getElementById('lang')?.value)) return false;
     if (SCAN_RE.test(maskNonCode(code))) return true;
     const selectors = 'select, [role="combobox"]';
     return Array.from(document.querySelectorAll(selectors)).some(el => {
