@@ -566,7 +566,7 @@ let pythonEnginePromise=null;
 let analysisRevision=0;
 function pythonFallback(text,out){
   const lines=text.replace(/\r\n?/g,'\n').split('\n');
-  const stack=[]; const records=[];
+  const stack=[]; const records=[]; const maskedLines=[];
   let quote='', quoteAt=null, escaped=false, logical=null;
   const pairs={')':'(',']':'[','}':'{'};
   const header=/^\s*(?:(?:async\s+)?(?:def|for|with)|if|elif|else|while|try|except\*?|finally|class|match|case)\b/;
@@ -596,6 +596,7 @@ function pythonFallback(text,out){
       }else if(c===':' && !stack.length && raw[j+1]!=='=')topColon=true;
       masked+=c;
     }
+    maskedLines.push(masked);
     const significant=masked.trim();
     if(starting && significant){
       const h=header.test(masked) && !/^\s*(?:match|case)\s*(?:=|:|\+=|-=)/.test(masked);
@@ -621,6 +622,44 @@ function pythonFallback(text,out){
   }
   if(quote&&quoteAt)err('SyntaxError: ข้อความหลายบรรทัดไม่ปิด',quoteAt.line,quoteAt.col,lines[quoteAt.line-1],'Triple-quoted string ยังไม่ปิด','เติมเครื่องหมายคำพูดสามตัวให้ครบคู่');
   for(const b of stack)err('SyntaxError: วงเล็บเปิดยังไม่ปิด',b.line,b.col,lines[b.line-1],'วงเล็บเปิดยังไม่มีวงเล็บปิดที่ตรงคู่','ตรวจคู่ของ (), [] และ {}');
+  // Check indentation of logical lines, excluding continuation lines.
+  const levels=[0];
+  for(const r of records){
+    const last=levels.at(-1);
+    if(r.indent>last){levels.push(r.indent);}
+    else if(r.indent<last){
+      while(levels.length>1&&levels.at(-1)>r.indent)levels.pop();
+      if(levels.at(-1)!==r.indent){
+        err('IndentationError: ระดับการเยื้องบรรทัดไม่ตรงกัน',r.line,r.indent+1,lines[r.line-1],
+          'ระดับการเยื้องไม่ตรงกับระดับบล็อกที่เปิดไว้','จัดแนว else ให้ตรงกับ if ที่เป็นคู่กัน หรือจัดคำสั่งให้ตรงกับบล็อกเดิม ใช้ Space 4 ตัวต่อระดับ');
+        // Recover the likely indentation level to avoid cascading reports.
+      }
+    }
+  }
+  // Context-sensitive hints for score/attendance exercises, never definitive errors.
+  const gradingExercise=['subject','work','mid','final','attendance','minimum','total'].every(n=>new RegExp('\\b'+n+'\\b').test(maskedLines.join('\n')));
+  if(gradingExercise){
+    for(let i=0;i<maskedLines.length;i++){
+      const line=maskedLines[i];
+      if(/^\s*if\s*\(/.test(line)){
+        let j=i;while(j<maskedLines.length-1 && j-i<12 && !/:\s*$/.test(maskedLines[j]))j++;
+        const cond=maskedLines.slice(i,j+1).join(' ');
+        if(/\bsubject\s+not\s+in\b/.test(cond)&&/\bnot\s+0\s*<=/.test(cond)&&/\battendance\b/.test(cond)){
+          for(let k=i;k<=j;k++){
+            const m=maskedLines[k].match(/\band\b/);
+            if(m)add(out,'warn','ตรวจสอบตรรกะ: เงื่อนไขข้อมูลไม่ถูกต้องใช้ and',k+1,m.index+1,lines[k].trim(),
+              'หากต้องปฏิเสธข้อมูลเมื่อมีค่าใดค่าหนึ่งผิด การใช้ and อาจทำให้ต้องผิดหลายเงื่อนไขพร้อมกันจึงจะปฏิเสธ','เทียบกับโจทย์ หากค่าใดค่าหนึ่งผิดต้อง INVALID ให้ใช้ or เชื่อมเงื่อนไขผิดแต่ละข้อ');
+          }
+        }
+      }
+      const score=line.match(/^\s*total\s*=\s*work\s*\+\s*mid\s*\+\s*final\s*([-+])\s*(\d+(?:\.\d+)?)\s*$/);
+      if(score&&Number(score[2])!==0)add(out,'warn','ตรวจสอบตรรกะ: คะแนนรวมมีการปรับเพิ่มหรือลด',i+1,score.index+1,lines[i].trim(),
+        'สูตรมีการ'+(score[1]==='-'?'ลบ':'เพิ่ม')+' '+score[2]+' คะแนน นอกเหนือจากคะแนนทั้งสามส่วน','หากโจทย์กำหนดให้รวมคะแนนตรง ๆ ให้ใช้ total = work + mid + final');
+      const boundary=line.match(/^\s*(?:if|elif)\s+total\s*>\s*(\d+(?:\.\d+)?)\s*:/);
+      if(boundary)add(out,'warn','ตรวจสอบตรรกะ: เงื่อนไขคะแนนไม่รวมค่าขอบเขต',i+1,line.indexOf('>')+1,lines[i].trim(),
+        'เครื่องหมาย > ไม่รวมคะแนนที่เท่ากับ '+boundary[1],'หากโจทย์ระบุคะแนน '+boundary[1]+' ขึ้นไป ให้ใช้ >= แทน >');
+    }
+  }
   // Detect only if/else each containing exactly one identical literal assignment.
   const literal=/^([A-Za-z_]\w*)\s*=\s*(-?\d+(?:\.\d+)?|True|False|None)\s*$/;
   for(let i=0;i+3<records.length;i++){
@@ -657,11 +696,12 @@ function pythonCompilerIssue(result,text,out){
   if(result.ok)return;
   const {type,message,line,col}=result;
   let title=type,easy=pythonExplain(type,message),fix=pythonFix(type,message),codefix='';
-  if(type==='TabError'){easy='ใช้ Tab และ Space ในการเยื้องบรรทัดไม่สอดคล้องกัน';fix='ใช้ Space 4 ตัวต่อระดับอย่างสม่ำเสมอ';}
-  if(/expected ':'/.test(message)){
+  if(type==='TabError'){title='TabError: ใช้ Tab และ Space ไม่สอดคล้องกัน';easy='ใช้ Tab และ Space ในการเยื้องบรรทัดไม่สอดคล้องกัน';fix='ใช้ Space 4 ตัวต่อระดับอย่างสม่ำเสมอ';}
+  else if(type==='IndentationError'){title='IndentationError: ระดับการเยื้องบรรทัดไม่ถูกต้อง';fix='จัดระดับการเยื้องให้ตรงกับบล็อกเดิม เช่น else ต้องอยู่ระดับเดียวกับ if ที่เป็นคู่กัน ใช้ Space 4 ตัวต่อระดับ';}
+  else if(/expected ':'/.test(message)){
     title='SyntaxError: ขาดเครื่องหมาย :';easy='Python คาดว่าจะพบ colon ก่อนเริ่มบล็อกคำสั่ง';fix='เติม : ที่ท้ายหัวคำสั่ง ก่อน comment';
     const local=[];pythonFallback(text,local);codefix=local.find(x=>x.line===line&&x.title===title)?.codefix||'';
-  }else if(/never closed|does not match|unmatched/.test(message)){title=type+': วงเล็บไม่ครบหรือไม่ตรงคู่';fix='ตรวจวงเล็บ (), [] และ {} ให้ครบและตรงคู่';}
+  }else if(type==='SyntaxError'&&/never closed|does not match|unmatched/.test(message)){title=type+': วงเล็บไม่ครบหรือไม่ตรงคู่';fix='ตรวจวงเล็บ (), [] และ {} ให้ครบและตรงคู่';}
   else if(/unterminated|EOL while scanning/.test(message)){title=type+': เครื่องหมายคำพูดไม่ครบ';fix='ตรวจเครื่องหมายคำพูดเปิดและปิดของ String';}
   add(out,'error',title,line,Math.max(0,col),type+': '+message,easy,fix,codefix);
 }
@@ -743,7 +783,7 @@ function dedupe(a){
 }
 
 function render(items){
-  items=dedupe(items);
+  items=dedupe(items).sort((a,b)=>({error:0,warn:1,info:2}[a.type]-({error:0,warn:1,info:2}[b.type]))||a.line-b.line);
   count.textContent=`${items.length} จุด`;
   const e=items.filter(x=>x.type==='error').length,w=items.filter(x=>x.type==='warn').length,inf=items.filter(x=>x.type==='info').length;
   if(!items.length){
@@ -766,7 +806,7 @@ function render(items){
         <div class="issue-title">${esc(x.title)}</div>
         <button class="linebtn" onclick="goLine(${x.line})">บรรทัด ${x.line}${x.col?`, คอลัมน์ ${x.col}`:''}</button>
       </div>
-      ${x.raw?`<p><b>ข้อความจาก Compiler:</b> ${esc(x.raw)}</p>`:''}
+      ${x.raw?`<p><b>${x.type==='warn'?'โค้ดที่ควรตรวจสอบ':'รายละเอียดข้อผิดพลาด'}:</b> ${esc(x.raw)}</p>`:''}
       <div class="easy"><b>ผิดเพราะอะไร:</b> ${esc(x.easy)}</div>
       <div class="fix"><b>วิธีแก้:</b> ${esc(x.fix)}</div>
       ${(before||after)?`
@@ -820,9 +860,14 @@ document.getElementById('analyze').onclick=async()=>{
   try{
     const result=await fullPythonCheck(source);
     if(revision!==analysisRevision||code.value!==source||lang.value!==language)return;
-    const checked=local.filter(x=>x.type==='warn');pythonCompilerIssue(result,source,checked);
+    const confirmed=[];pythonCompilerIssue(result,source,confirmed);
+    const checked=[...confirmed,...local.filter(x=>{
+      if(x.type!=='error')return true;
+      if(result.ok)return false; // successful compile disproves local syntax errors
+      return !confirmed.some(y=>y.line===x.line&&(y.title===x.title||(/^(IndentationError|TabError)/.test(y.title)&&/^IndentationError/.test(x.title))));
+    })];
     showAnalysis(mergePython(checked),'ตรวจด้วย Python จริงแล้ว');
-    document.getElementById('easy').insertAdjacentHTML('afterbegin','<div class="tip"><b>Python compiler</b><span>ตรวจไวยากรณ์โดยไม่รันโค้ด อาจแสดง Syntax Error แรกเท่านั้น ให้แก้แล้วตรวจซ้ำ ส่วนตรรกะและผลลัพธ์ต้องเทียบกับโจทย์</span></div>');
+    document.getElementById('easy').insertAdjacentHTML('afterbegin','<div class="tip"><b>Python compiler</b><span>ตรวจไวยากรณ์โดยไม่รันโค้ด รักษาข้อสังเกตจากตัวตรวจพื้นฐานไว้เมื่อ compile ไม่ผ่าน โดย Python ยืนยัน Error แรกเท่านั้น ข้อสังเกตอื่นอาจต้องแก้แล้วตรวจซ้ำ ส่วน Warning ด้านตรรกะต้องเทียบโจทย์</span></div>');
   }catch(e){
     if(revision!==analysisRevision||code.value!==source||lang.value!==language)return;
     showAnalysis(mergePython(local),'โหมดพื้นฐาน (Python จริงไม่พร้อม)');
